@@ -9,7 +9,6 @@ import DisenchantAdvisorView from './views/DisenchantAdvisorView.tsx'
 import HistoryView from './views/HistoryView.tsx'
 import SettingsView from './views/SettingsView.tsx'
 import { useStore } from './stores/store.ts'
-import { api } from './services/api.ts'
 import { useCollectionSnapshots } from './hooks/useCollectionSnapshots.ts'
 
 const TWO_HOURS = 2 * 60 * 60 * 1000
@@ -33,20 +32,17 @@ export default function App() {
         fetchVariantAvailability(),
       ])
 
-      const { collectionSyncedAt, syncCollection, addToast } = useStore.getState()
-      const isStale = !collectionSyncedAt || (Date.now() - collectionSyncedAt > TWO_HOURS)
-      if (!isStale) return
+      const { collection, hsSessionId, syncCollection, addToast } = useStore.getState()
+      const syncedAt = collection?.syncedAt
+      const isStale = !syncedAt || (Date.now() - syncedAt > TWO_HOURS)
+      if (!isStale || !hsSessionId) return
 
       try {
-        const settings = await api.getSettings()
-        const sessionId = settings.sessionId as string
-        if (sessionId) {
-          const result = await syncCollection(sessionId)
-          if (result.success) {
-            addToast(`Collection synced: ${result.cards?.toLocaleString()} cards, ${result.dust?.toLocaleString()} dust`, 'success')
-          }
+        const result = await syncCollection()
+        if (result.success) {
+          addToast(`Collection synced: ${result.cards?.toLocaleString()} cards, ${result.dust?.toLocaleString()} dust`, 'success')
         }
-      } catch { /* no session id or network error — banner will show */ }
+      } catch { /* network error — banner will show */ }
     }
 
     init()

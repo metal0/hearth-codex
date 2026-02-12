@@ -1,7 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, rmSync, readdirSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, readdirSync, unlinkSync } from 'fs';
 import {
   getCardDb,
   fetchAndCacheCardDb,
@@ -72,15 +72,29 @@ app.post('/api/cards/refresh', async (_req, res) => {
 });
 
 app.post('/api/card-art/clear-cache', (_req, res) => {
-  if (existsSync(CARD_ART_CACHE)) {
-    const files = readdirSync(CARD_ART_CACHE);
-    rmSync(CARD_ART_CACHE, { recursive: true });
+  if (!existsSync(CARD_ART_CACHE)) {
     mkdirSync(CARD_ART_CACHE, { recursive: true });
-    res.json({ cleared: files.length });
-  } else {
-    mkdirSync(CARD_ART_CACHE, { recursive: true });
-    res.json({ cleared: 0 });
+    res.json({ queued: 0 });
+    return;
   }
+
+  const files = readdirSync(CARD_ART_CACHE);
+  let missRemoved = 0;
+  let pngQueued = 0;
+  for (const file of files) {
+    if (file.endsWith('.miss')) {
+      unlinkSync(join(CARD_ART_CACHE, file));
+      missRemoved++;
+    } else if (file.endsWith('.png')) {
+      pngQueued++;
+    }
+  }
+
+  if (cardDb && pngQueued > 0 && !process.env.DISABLE_ART_PREFETCH) {
+    prefetchCardArt(cardDb).catch(err => console.error('[Prefetch] Error:', err));
+  }
+
+  res.json({ queued: pngQueued, missCleared: missRemoved });
 });
 
 app.get('/api/expansions', (_req, res) => {
@@ -522,16 +536,14 @@ function invalidateArtForCards(cardIds: string[]): number {
   let removed = 0;
   for (const cardId of cardIds) {
     for (const variant of ART_VARIANTS) {
-      for (const ext of ['.png', '.miss']) {
-        const file = join(CARD_ART_CACHE, `${cardId}_${variant}${ext}`);
-        if (existsSync(file)) {
-          unlinkSync(file);
-          removed++;
-        }
+      const missFile = join(CARD_ART_CACHE, `${cardId}_${variant}.miss`);
+      if (existsSync(missFile)) {
+        unlinkSync(missFile);
+        removed++;
       }
     }
   }
-  if (removed > 0) console.log(`[ArtCache] Invalidated ${removed} files for ${cardIds.length} changed cards`);
+  if (removed > 0) console.log(`[ArtCache] Cleared ${removed} miss markers for ${cardIds.length} changed cards`);
   return removed;
 }
 

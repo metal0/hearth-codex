@@ -8,7 +8,6 @@ import { api } from '../services/api.ts'
 const TWO_HOURS = 2 * 60 * 60 * 1000
 
 function SyncBanner() {
-  const collectionSyncedAt = useStore(s => s.collectionSyncedAt)
   const collectionLoading = useStore(s => s.collectionLoading)
   const syncLoading = useStore(s => s.syncLoading)
   const collection = useStore(s => s.collection)
@@ -16,7 +15,8 @@ function SyncBanner() {
   if (collectionLoading || syncLoading) return null
 
   const hasCards = Object.keys(collection?.collection ?? {}).length > 0
-  const isStale = !collectionSyncedAt || (Date.now() - collectionSyncedAt > TWO_HOURS)
+  const syncedAt = collection?.syncedAt
+  const isStale = !syncedAt || (Date.now() - syncedAt > TWO_HOURS)
 
   if (!isStale && hasCards) return null
 

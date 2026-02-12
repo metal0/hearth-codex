@@ -1,0 +1,16 @@
+services:
+  hearth-codex:
+    build: .
+    ports:
+      - "4000:4000"
+    volumes:
+      - data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      # Enable art prefetching for local hosting (caches card art to disk)
+      - DISABLE_ART_PREFETCH=
+    restart: unless-stopped
+
+volumes:
+  data:

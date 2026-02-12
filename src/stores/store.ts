@@ -184,7 +184,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({ collectionLoading: true });
     try {
       const collection = await api.getCollection();
-      set({ collection, collectionSyncedAt: collection.syncedAt ?? null });
+      set({ collection });
     } catch (err) {
       console.error('Failed to fetch collection:', err);
     } finally {
@@ -240,7 +240,7 @@ export const useStore = create<AppState>((set, get) => ({
           get().addToast('Card database auto-updated (new cards detected)', 'success');
         }
         await get().fetchCollection();
-        set({ collectionSyncedAt: result.syncedAt ?? Date.now() });
+        set({ collectionSyncedAt: Date.now() });
         return { success: true, cards: result.cards, dust: result.dust };
       }
       return { success: false, error: 'Sync returned unsuccessful' };
