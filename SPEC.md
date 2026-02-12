@@ -1,0 +1,355 @@
+# Hearthstone Collection Tracker — Product Specification
+
+## Overview
+
+A local-only web application that tracks your full Hearthstone card collection with proper card renders, rich filtering, meta-aware craft/pack prioritization, a pack completion calculator with strategy comparison, and a card art caching proxy — all running on localhost with no external accounts required beyond a one-time HSReplay cookie paste.
+
+## Architecture
+
+### Stack
+- **Frontend**: React 19 + Vite 6 (TypeScript), Tailwind CSS 4, Zustand 5 state management, Recharts 2 for charts
+- **Backend**: Node.js 22 with Express 5 — API server for data fetching, caching, simulation, and serving the SPA
+- **Storage**: Filesystem (`data/` folder) as source of truth
+- **No npm auth dependencies**: Collection sync uses cookie-paste approach
+
+### Data Sources
+| Data | Source | Refresh Strategy |
+|------|--------|-----------------|
+| Card database (names, stats) | HearthstoneJSON API (`api.hearthstonejson.com`) | Auto on startup if >24h stale |
+| Card art (normal) | HearthstoneJSON CDN (`art.hearthstonejson.com`) | Proxied and cached server-side |
+| Card art (golden/signature/diamond) | `hearthstone.wiki.gg` Premium1/2/3 images | Proxied and cached server-side |
+| User collection | HSReplay API via saved session cookie + Cloudflare bypass | Manual trigger + auto-sync if >2h stale |
+| Meta/usage stats (standard + wild) | HSReplay `card_list_free` endpoint | Auto on startup if >24h stale, manual refresh |
+
+### Server Responsibilities
+- Serve the React SPA (production build from `dist/`)
+- Proxy HSReplay API calls via puppeteer-stealth Cloudflare bypass
+- Proxy and cache all card art (normal, golden, signature, diamond variants)
+- Background prefetch all card art on startup
+- Cache card DB + meta stats + art to filesystem (`data/`)
+- Run Monte Carlo pack simulations (offloaded to server to avoid blocking UI)
+- Expose REST endpoints for the frontend
+
+### API Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/cards` | GET | Full card database |
+| `/api/cards/refresh` | POST | Re-fetch card DB from HearthstoneJSON, clear art cache |
+| `/api/expansions` | GET | Dynamic expansion list derived from card DB |
+| `/api/collection` | GET | User's collection data |
+| `/api/collection/sync` | POST | Trigger HSReplay sync using stored cookie |
+| `/api/meta` | GET | Card meta stats (standard + wild), auto-refreshes if >4h stale |
+| `/api/meta/refresh` | POST | Force refresh meta stats |
+| `/api/calculator` | POST | Run pack simulation with strategy comparison |
+| `/api/settings` | GET/PUT | App settings (session cookie) |
+| `/api/data-status` | GET | Card DB age, meta age, CF clearance status |
+| `/api/card-art/:cardId/:variant` | GET | Proxied card art with server-side caching |
+| `/api/card-art/cache-stats` | GET | Per-variant cache statistics (cached/missed counts) |
+| `/api/card-art/clear-cache` | POST | Clear all cached card art |
+| `/api/prefetch-status` | GET | Background prefetch progress |
+| `/api/variant-availability` | GET | Lists cards confirmed missing signature/diamond variants |
+| `/api/cf/solve` | POST | Trigger Cloudflare challenge solve |
+| `/api/cf/status` | GET | Cloudflare clearance status |
+
+## Card Art System
+
+All card art is served through the server as a caching proxy. No direct external art requests from the frontend.
+
+### Art Sources
+| Variant | Source | URL Pattern |
+|---------|--------|-------------|
+| `normal` | HearthstoneJSON | `art.hearthstonejson.com/v1/render/latest/enUS/256x/{id}.png` |
+| `normal-lg` | HearthstoneJSON | `art.hearthstonejson.com/v1/render/latest/enUS/512x/{id}.png` |
+| `golden` | wiki.gg | `hearthstone.wiki.gg/images/{id}_Premium1.png` |
+| `diamond` | wiki.gg | `hearthstone.wiki.gg/images/{id}_Premium2.png` |
+| `signature` | wiki.gg | `hearthstone.wiki.gg/images/{id}_Premium3.png` |
+
+### Caching
+- All art cached in `data/card-art-cache/` as `{cardId}_{variant}.png`
+- Confirmed 404s recorded as `.miss` files (prevents re-fetching known-missing variants)
+- Cached files served via `res.sendFile()` (async streaming, no event loop blocking)
+- Cache-Control: 7 days for cached/miss responses, 1 day for on-demand 404s
+- Deduplication: concurrent requests for the same art share a single fetch promise
+
+### Background Prefetcher
+Runs on server startup after card DB loads. Prefetches ALL cards in ALL 4 variants:
+- **Normal**: 10 concurrent workers, 50ms delay (HearthstoneJSON)
+- **Golden/Signature/Diamond**: 5 concurrent workers, 200ms delay (wiki.gg)
+- Rate limit handling: 429 responses trigger pause using Retry-After header (default 30s)
+- Already-cached or already-missed files are skipped
+- Progress exposed via `/api/prefetch-status`, displayed in frontend PrefetchBanner
+
+### Variant Availability
+wiki.gg coverage is inconsistent for Premium2 (diamond) and Premium3 (signature). The system determines actual variant availability by checking for `.miss` files in the art cache:
+- `/api/variant-availability` scans for `*_signature.miss` and `*_diamond.miss` files
+- Frontend stores missing variant sets in `variantMissing` state
+- Cards with confirmed-missing variants are excluded from signature/diamond collection modes
+- Cards not yet checked (no cache hit or miss) are shown optimistically
+
+### Background Retries
+When art fetch fails with non-404 status (rate limits, timeouts), background retries are scheduled with exponential backoff (up to 5 attempts). 429s respect the Retry-After header.
+
+## Collection Modes
+
+The app supports 4 collection tracking modes, toggled globally via `CollectionModeToggle`:
+
+| Mode | What Counts as "Owned" | Image Shown | Visible Cards |
+|------|----------------------|-------------|---------------|
+| **Normal** | normal + golden + diamond + signature | Best owned variant (diamond > sig > golden > normal) | All cards |
+| **Golden** | golden + diamond + signature | Golden variant | All cards |
+| **Signature** | signature + diamond (only if variant exists) | Signature variant | Cards from yearNum >= 2022 with confirmed sig art |
+| **Diamond** | diamond only (only if variant exists) | Diamond variant | Legendaries with confirmed diamond art |
+
+Cards without a variant in the selected mode show the normal art (greyed out if unowned). In signature/diamond modes, cards without the variant are auto-marked as "complete" to avoid polluting the collection view.
+
+## Views & Navigation
+
+Persistent **sidebar** navigation with 5 views. Sidebar shows per-expansion completion bars (dust-weighted) with per-rarity breakdown tooltips.
+
+### 1. Collection View (default `/`)
+
+Card grid showing every collectible card with ownership overlay.
+
+**Card Tiles:**
+- Card renders from server art proxy
+- Unowned cards displayed greyscale/dimmed
+- Default grouping by rarity (Legendary > Epic > Rare > Common), then mana cost, then name
+- Client-side 1.5s timeout with fallback to normal art and background probe retries at 10s, 30s
+
+**Filter Bar:**
+| Filter | Type | Options |
+|--------|------|---------|
+| Set/Expansion | Dropdown (multi-select) | All expansions |
+| Class | Class picker with WoW-style icons | 11 classes + Neutral |
+| Rarity | Toggle chips with gem icons | Common, Rare, Epic, Legendary |
+| Ownership | Toggle chips | All, Owned, Incomplete |
+| Format | Toggle with HS icons | Standard / Wild |
+| Text Search | Input | Searches card name + text |
+| Sort | Dropdown | Name, Cost, Rarity, Set, Inclusion Rate, Winrate |
+
+**Card Interactions:**
+- Hover: enlarged card render + stats tooltip (inclusion rate, winrate, dust cost)
+- Click: detail modal with full card info, meta stats, ownership counts, art variant toggle buttons
+
+### 2. Cost Calculator (`/calculator`)
+
+Estimates packs/gold/dollars needed to complete collection for selected expansions.
+
+**Controls:**
+- Mode selector: Standard / All (Wild) / Custom
+- Custom mode: checkbox grid for individual expansion selection
+- Current dust input (auto-filled from collection sync)
+- Calculate button runs Monte Carlo simulation (200 runs)
+
+**Results:**
+- Per-expansion breakdown table: avg packs, median, best-worst range, 25th-75th percentile
+- Strategy Comparison table comparing 3 approaches:
+  1. **Per-set packs** (100 gold each): buy expansion-specific packs
+  2. **Standard/Wild packs** (100 gold each): random expansion per pack, simulated via `simulateMultiExpansion()`
+  3. **Golden packs + craft** (400 gold each): buy golden packs, disenchant all, craft missing normals analytically
+- Each strategy shows: packs needed, total gold, USD estimate ($0.01167/gold)
+- Best strategy highlighted with savings percentage vs worst
+- Bar chart of packs per expansion
+- Debug toggle for intermediate simulation values
+
+**Simulation Engine:**
+- Pity timer tracking: legendary hard cap 40, epic hard cap 10, soft pity quadratic escalation
+- First-10 legendary guarantee for new expansions
+- Duplicate protection matching real game mechanics
+- Multi-expansion simulation: random expansion selection per pack, per-expansion pity timers, shared dust pool with cross-expansion crafting
+- Golden pack analysis: analytical calculation (~434 dust/pack conservative floor)
+
+### 3. Craft Advisor (`/craft`)
+
+Ranked list of all missing cards sorted by meta impact.
+
+**Features:**
+- Same filter bar as Collection View (set, class, rarity, format, search)
+- Sortable columns: card name, rarity, dust cost, set, class, inclusion rate, winrate
+- Winrate only shown for cards with 100+ games played
+- Golden art hover preview
+- Mode-aware: respects current collection mode for "missing" calculation
+
+### 4. Pack Advisor (`/packs`)
+
+Per-expansion pack value analysis using meta stats to prioritize which packs to buy.
+
+**Features:**
+- Per-expansion breakdown: cards missing, meta-relevant missing, pull chances per rarity
+- Column sorting
+- Rarity gem icons
+- Dust-per-pack estimates
+- Class and rarity filters
+- Mode-aware ownership calculation
+
+### 5. Settings (`/settings`)
+
+**HSReplay Connection:**
+- Session cookie paste (sessionid from browser DevTools)
+- Save and sync buttons with progress indicator
+
+**Card Database:**
+- Refresh from HearthstoneJSON (also clears art cache)
+
+**Meta Stats:**
+- Manual refresh with auto-refresh every 4 hours
+
+**Card Art Cache:**
+- Per-variant breakdown (normal/golden/signature/diamond) showing cached and missed counts
+- Clear cache button
+
+**Cloudflare Clearance:**
+- Status indicator (active/expired with expiry time)
+- Manual solve button
+
+## Dynamic Expansion System
+
+Expansions are derived dynamically from the card database — no hardcoded card counts.
+
+- `EXPANSION_METADATA` map provides display names and year info (cosmetic only)
+- `EXCLUDED_SETS`: 15 non-pack sets excluded (CORE, VANILLA, LEGACY, etc.)
+- `deriveExpansionsFromDb()`: counts cards per rarity from API data
+- `applyStandardRotation()`: 2 most recent yearNums = Standard
+- New expansions auto-detected after "Refresh Card Database"
+
+## HSReplay Integration
+
+### Collection Sync
+- Cookie-paste approach: user provides `sessionid` from browser DevTools
+- Server fetches `/api/v1/account/` to get Blizzard account params, then `/api/v1/collection/`
+- Collection format: `{ collection: { dbfId: [normal, golden, diamond, sig] }, dust: N }`
+- Auto-sync on app startup if collection is >2h stale
+
+### Meta Stats
+- Fetches `card_list_free` endpoint for RANKED_STANDARD and RANKED_WILD
+- Polls for 202 (query processing) up to 12 times with 10s delay
+- Stores per-card: popularity (inclusion rate), winrate, decks played, dominant class
+
+### Cloudflare Bypass
+- Uses puppeteer-stealth to solve Cloudflare challenges
+- Browser instance idles with 5-minute timeout
+- All HSReplay requests proxied through the browser context
+- Status tracked and exposed via API
+
+## Data Models
+
+### CardDbEntry
+```typescript
+interface CardDbEntry {
+  id: string;        // e.g. "CS2_029"
+  set: string;       // e.g. "TIME_TRAVEL"
+  rarity: 'COMMON' | 'RARE' | 'EPIC' | 'LEGENDARY';
+  name: string;
+  type: string;      // MINION, SPELL, WEAPON, HERO, LOCATION
+  cardClass: string; // e.g. "MAGE"
+  cost: number;
+  attack?: number;
+  health?: number;
+  text?: string;
+}
+```
+
+### CollectionData
+```typescript
+interface CollectionData {
+  collection: Record<string, number[]>; // dbfId -> [normal, golden, diamond, signature]
+  dust?: number;
+  gold?: number;
+  syncedAt?: number | null;
+}
+```
+
+### EnrichedCard (frontend)
+```typescript
+interface EnrichedCard extends CardDbEntry {
+  dbfId: string;
+  normalCount: number;
+  goldenCount: number;
+  diamondCount: number;
+  signatureCount: number;
+  totalOwned: number;    // mode-aware ownership count
+  maxCopies: number;     // 1 for legendary, 2 otherwise
+  imageUrl: string;      // /api/card-art/:id/:variant
+  inclusionRate: number;
+  winrate: number;
+  decks: number;
+}
+```
+
+### ComparisonResult (calculator)
+```typescript
+interface ComparisonResult {
+  perSetTotal: number;           // sum of per-set simulation means
+  multiPackStats: SimStats;      // Standard/Wild pack simulation stats
+  goldenAnalysis: {
+    avgDustPerPack: number;      // ~434 dust conservative
+    packsToComplete: number;     // totalCraftCost / avgDustPerPack
+    totalCraftCost: number;      // dust needed to craft all missing
+  };
+}
+```
+
+## UI Design
+
+- **Dark theme**, Hearthstone-inspired palette:
+  - Background: deep navy (#0a0a14)
+  - Accents: warm gold (#d4a843), mana blue (#4fc3f7)
+  - Rarity colors: grey (common), blue (rare), purple (epic), orange (legendary)
+- **Desktop-first** — optimized for 1920x1080+
+- Card grid uses CSS Grid with responsive columns
+- Filter bar is compact, horizontal, sticky
+- Sidebar: narrow with Hearthstone-style icons, per-expansion completion bars
+- Banners: error (red), sync warning (amber), prefetch progress (blue)
+- Toast notifications for sync success/failure
+
+## File Structure
+```
+hearthstone/
+├── package.json
+├── vite.config.ts
+├── SPEC.md
+├── data/                      # Persistent storage (git-ignored)
+│   ├── card-db.json           # HearthstoneJSON card database
+│   ├── my-collection.json     # User's collection
+│   ├── meta-stats.json        # Standard + Wild meta stats
+│   ├── settings.json          # App settings (session cookie)
+│   └── card-art-cache/        # Cached card art (png + miss files)
+├── server/
+│   ├── index.ts               # Express server, all API routes, art proxy, prefetcher
+│   ├── data.ts                # Card data, expansions, collection parsing
+│   ├── simulator.ts           # Monte Carlo pack simulation + strategy comparison
+│   └── cloudflare.ts          # Puppeteer-stealth CF bypass + browser-based fetch
+├── src/
+│   ├── main.tsx               # Entry point
+│   ├── App.tsx                # Root component + routing + init
+│   ├── types.ts               # Shared TypeScript types
+│   ├── components/
+│   │   ├── Layout.tsx         # Shell with banners (error, sync, prefetch, toast)
+│   │   ├── Sidebar.tsx        # Navigation + completion bars
+│   │   ├── CardGrid.tsx       # Responsive card grid
+│   │   ├── CardTile.tsx       # Individual card with fallback/retry logic
+│   │   ├── CardHover.tsx      # Enlarged hover preview
+│   │   ├── CardModal.tsx      # Detail modal with art variant toggles
+│   │   ├── FilterBar.tsx      # Filter controls
+│   │   ├── ClassPicker.tsx    # WoW-style class icons
+│   │   ├── RarityFilter.tsx   # Rarity gem toggle chips
+│   │   ├── CollectionModeToggle.tsx  # N/G/S/D mode toggle
+│   │   └── Icons.tsx          # Dust, gold, pack SVG icons
+│   ├── views/
+│   │   ├── CollectionView.tsx
+│   │   ├── CalculatorView.tsx # Cost Calculator with strategy comparison
+│   │   ├── CraftAdvisorView.tsx
+│   │   ├── PackAdvisorView.tsx
+│   │   └── SettingsView.tsx
+│   ├── stores/
+│   │   └── store.ts           # Zustand store (state, actions, enrichment, filtering)
+│   └── services/
+│       └── api.ts             # API client
+└── cli/                       # Original CLI calculator (preserved)
+```
+
+## Non-Goals
+- **No user accounts / multi-user support** — single user, local only
+- **No deck builder** — data layer supports future addition
+- **No mobile-optimized layouts** — desktop-first
+- **No real-time Hearthstone game integration** — collection sync is manual/auto trigger
