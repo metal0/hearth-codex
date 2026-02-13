@@ -17,6 +17,7 @@ const DATA_DIR = join(__dirname, '..', 'data');
 const CARD_DB_PATH = join(DATA_DIR, 'card-db.json');
 const META_PATH = join(DATA_DIR, 'meta-stats.json');
 const PORT = parseInt(process.env.PORT || '4000');
+const HOSTED_MODE = !!process.env.HOSTED_MODE;
 
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 initAuth(DATA_DIR);
@@ -91,6 +92,11 @@ function authenticateUser(req: AuthRequest, res: express.Response, next: express
   next();
 }
 
+function rejectInHostedMode(_req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (HOSTED_MODE) { res.status(403).json({ error: 'This action is disabled in hosted mode' }); return; }
+  next();
+}
+
 app.post('/api/auth/register', async (req, res) => {
   const sessionId = req.body?.sessionId;
   if (!sessionId) {
@@ -162,6 +168,7 @@ app.get('/api/data-status', (_req, res) => {
     cardDb: { updatedAt: cardDbAge },
     meta: { updatedAt: metaAge },
     cf,
+    hostedMode: HOSTED_MODE,
   });
 });
 
@@ -170,7 +177,7 @@ app.get('/api/cards', async (_req, res) => {
   res.json(cardDb);
 });
 
-app.post('/api/cards/refresh', async (_req, res) => {
+app.post('/api/cards/refresh', rejectInHostedMode, async (_req, res) => {
   const { db, changedCardIds } = await fetchAndCacheCardDb();
   cardDb = db;
   const invalidated = invalidateArtForCards(changedCardIds);
@@ -181,7 +188,7 @@ app.post('/api/cards/refresh', async (_req, res) => {
   res.json({ count: Object.keys(db).length, expansions: exps.length, changed: changedCardIds.length, invalidated });
 });
 
-app.post('/api/card-art/clear-cache', (_req, res) => {
+app.post('/api/card-art/clear-cache', rejectInHostedMode, (_req, res) => {
   if (!existsSync(CARD_ART_CACHE)) {
     mkdirSync(CARD_ART_CACHE, { recursive: true });
     res.json({ queued: 0 });
@@ -222,7 +229,7 @@ app.get('/api/collection', authenticateUser, (req: AuthRequest, res) => {
   res.json({ ...data, syncedAt: mtimeMs });
 });
 
-app.post('/api/cf/solve', async (_req, res) => {
+app.post('/api/cf/solve', rejectInHostedMode, async (_req, res) => {
   try {
     const success = await ensureCfReady();
     if (success) {
@@ -432,7 +439,7 @@ app.get('/api/meta', async (_req, res) => {
   }
 });
 
-app.post('/api/meta/refresh', async (_req, res) => {
+app.post('/api/meta/refresh', rejectInHostedMode, async (_req, res) => {
   try {
     const meta = await fetchMetaStats();
     res.json({ count: Object.keys(meta.standard).length + Object.keys(meta.wild).length });
@@ -1021,6 +1028,31 @@ async function autoSyncAllUsers(): Promise<void> {
   }
 }
 
+async function autoRefreshSharedData(): Promise<void> {
+  try {
+    const cardDbAge = existsSync(CARD_DB_PATH) ? Date.now() - statSync(CARD_DB_PATH).mtimeMs : Infinity;
+    if (cardDbAge > SYNC_INTERVAL) {
+      console.log('[AutoRefresh] Card DB stale, refreshing...');
+      const { db } = await fetchAndCacheCardDb();
+      cardDb = db;
+      await initExpansions();
+      console.log(`[AutoRefresh] Card DB refreshed: ${Object.keys(db).length} cards`);
+    }
+  } catch (err) {
+    console.error('[AutoRefresh] Card DB refresh failed:', err);
+  }
+
+  try {
+    if (isMetaStale()) {
+      console.log('[AutoRefresh] Meta stats stale, refreshing...');
+      await fetchMetaStats();
+      console.log('[AutoRefresh] Meta stats refreshed');
+    }
+  } catch (err) {
+    console.error('[AutoRefresh] Meta stats refresh failed:', err);
+  }
+}
+
 initExpansions().then(async exps => {
   console.log(`Loaded ${exps.length} expansions (${exps.filter(e => e.standard).length} Standard)`);
   app.listen(PORT, () => {
@@ -1029,6 +1061,7 @@ initExpansions().then(async exps => {
 
   setInterval(() => { autoSyncAllUsers().catch(err => console.error('[AutoSync] Error:', err)); }, SYNC_INTERVAL);
   setInterval(() => { purgeInactiveUsers(); }, PURGE_INTERVAL);
+  setInterval(() => { autoRefreshSharedData().catch(err => console.error('[AutoRefresh] Error:', err)); }, SYNC_INTERVAL);
 
   if (!cardDb) cardDb = await getCardDb();
   if (!process.env.DISABLE_ART_PREFETCH) {

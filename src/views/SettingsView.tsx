@@ -20,6 +20,7 @@ export default function SettingsView() {
   const [cfStatus, setCfStatus] = useState<{ valid: boolean; expiresIn: number } | null>(null)
   const [cfSolving, setCfSolving] = useState(false)
   const [cacheStats, setCacheStats] = useState<{ cached: number; missed: number; totalCards: number; variants: Record<string, { cached: number; missed: number; total: number }> } | null>(null)
+  const [hostedMode, setHostedMode] = useState(false)
 
   useEffect(() => {
     api.getMe().then(me => {
@@ -28,6 +29,7 @@ export default function SettingsView() {
 
     api.getDataStatus().then(status => {
       setCfStatus(status.cf)
+      if (status.hostedMode) setHostedMode(true)
     }).catch(() => {})
 
     api.getArtCacheStats().then(setCacheStats).catch(() => {})
@@ -173,57 +175,62 @@ export default function SettingsView() {
         )}
       </section>
 
-      {/* Card Database */}
-      <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
-        <h2 className="text-sm font-bold text-white mb-3">Card Database</h2>
-        <p className="text-xs text-gray-400 mb-3">
-          Re-fetch the card database from HearthstoneJSON. This updates card names,
-          images, and stats for all expansions.
-        </p>
-        <button
-          onClick={handleRefreshCardDb}
-          disabled={refreshing}
-          className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
-                     hover:bg-white/15 transition-colors disabled:opacity-40"
-        >
-          {refreshing ? 'Refreshing...' : 'Refresh Card Database'}
-        </button>
-      </section>
+      {!hostedMode && (
+        <>
+          {/* Card Database */}
+          <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
+            <h2 className="text-sm font-bold text-white mb-3">Card Database</h2>
+            <p className="text-xs text-gray-400 mb-3">
+              Re-fetch the card database from HearthstoneJSON. This updates card names,
+              images, and stats for all expansions.
+            </p>
+            <button
+              onClick={handleRefreshCardDb}
+              disabled={refreshing}
+              className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
+                         hover:bg-white/15 transition-colors disabled:opacity-40"
+            >
+              {refreshing ? 'Refreshing...' : 'Refresh Card Database'}
+            </button>
+          </section>
 
-      {/* Meta Stats */}
-      <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
-        <h2 className="text-sm font-bold text-white mb-3">Meta Stats</h2>
-        <p className="text-xs text-gray-400 mb-3">
-          Refresh card popularity and win rate data from HSReplay. Auto-refreshes every 4 hours.
-        </p>
-        <button
-          onClick={async () => {
-            setRefreshingMeta(true)
-            try {
-              const result = await api.refreshMeta()
-              await fetchMeta()
-              setSyncResult({ success: true, message: `Meta stats refreshed: ${result.count} cards` })
-            } catch (err: unknown) {
-              const message = err instanceof Error ? err.message : 'Failed to refresh meta'
-              setSyncResult({ success: false, message })
-            } finally {
-              setRefreshingMeta(false)
-            }
-          }}
-          disabled={refreshingMeta}
-          className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
-                     hover:bg-white/15 transition-colors disabled:opacity-40"
-        >
-          {refreshingMeta ? 'Refreshing...' : 'Refresh Meta Stats'}
-        </button>
-      </section>
+          {/* Meta Stats */}
+          <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
+            <h2 className="text-sm font-bold text-white mb-3">Meta Stats</h2>
+            <p className="text-xs text-gray-400 mb-3">
+              Refresh card popularity and win rate data from HSReplay. Auto-refreshes every 4 hours.
+            </p>
+            <button
+              onClick={async () => {
+                setRefreshingMeta(true)
+                try {
+                  const result = await api.refreshMeta()
+                  await fetchMeta()
+                  setSyncResult({ success: true, message: `Meta stats refreshed: ${result.count} cards` })
+                } catch (err: unknown) {
+                  const message = err instanceof Error ? err.message : 'Failed to refresh meta'
+                  setSyncResult({ success: false, message })
+                } finally {
+                  setRefreshingMeta(false)
+                }
+              }}
+              disabled={refreshingMeta}
+              className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
+                         hover:bg-white/15 transition-colors disabled:opacity-40"
+            >
+              {refreshingMeta ? 'Refreshing...' : 'Refresh Meta Stats'}
+            </button>
+          </section>
+        </>
+      )}
 
       {/* Card Art Cache */}
       <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
         <h2 className="text-sm font-bold text-white mb-3">Card Art Cache</h2>
         <p className="text-xs text-gray-400 mb-3">
-          Card art (golden, signature, diamond variants) is cached locally to avoid repeated
-          requests to external sources. Clear the cache if card art appears incorrect or outdated.
+          {hostedMode
+            ? 'Card art variants are cached server-side and refreshed automatically.'
+            : 'Card art (golden, signature, diamond variants) is cached locally to avoid repeated requests to external sources. Clear the cache if card art appears incorrect or outdated.'}
         </p>
         {cacheStats && (
           <div className="mb-3 space-y-2">
@@ -263,65 +270,71 @@ export default function SettingsView() {
             )}
           </div>
         )}
-        <button
-          onClick={async () => {
-            try {
-              const result = await api.clearArtCache()
-              setSyncResult({ success: true, message: `Art cache cleared: ${result.cleared} files removed` })
-              const tc = cacheStats?.totalCards ?? 0;
-              setCacheStats({ cached: 0, missed: 0, totalCards: tc, variants: { normal: { cached: 0, missed: 0, total: tc }, golden: { cached: 0, missed: 0, total: tc }, signature: { cached: 0, missed: 0, total: tc }, diamond: { cached: 0, missed: 0, total: tc } } })
-            } catch {
-              setSyncResult({ success: false, message: 'Failed to clear art cache' })
-            }
-          }}
-          className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
-                     hover:bg-white/15 transition-colors"
-        >
-          Clear Art Cache
-        </button>
+        {!hostedMode && (
+          <button
+            onClick={async () => {
+              try {
+                const result = await api.clearArtCache()
+                setSyncResult({ success: true, message: `Art cache cleared: ${result.cleared} files removed` })
+                const tc = cacheStats?.totalCards ?? 0;
+                setCacheStats({ cached: 0, missed: 0, totalCards: tc, variants: { normal: { cached: 0, missed: 0, total: tc }, golden: { cached: 0, missed: 0, total: tc }, signature: { cached: 0, missed: 0, total: tc }, diamond: { cached: 0, missed: 0, total: tc } } })
+              } catch {
+                setSyncResult({ success: false, message: 'Failed to clear art cache' })
+              }
+            }}
+            className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
+                       hover:bg-white/15 transition-colors"
+          >
+            Clear Art Cache
+          </button>
+        )}
       </section>
 
-      {/* Cloudflare Status */}
-      <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
-        <h2 className="text-sm font-bold text-white mb-3">Cloudflare Clearance</h2>
-        <p className="text-xs text-gray-400 mb-3">
-          HSReplay uses Cloudflare protection. A valid clearance is required for collection sync and meta stats.
-        </p>
-        <div className="flex items-center gap-3 mb-3">
-          <div className={`w-2.5 h-2.5 rounded-full ${cfStatus?.valid ? 'bg-green-400' : 'bg-red-400'}`} />
-          <span className="text-sm text-gray-300">
-            {cfStatus === null
-              ? 'Checking...'
-              : cfStatus.valid
-                ? `Active (expires in ${Math.round(cfStatus.expiresIn / 60)}m)`
-                : 'Expired or not solved'}
-          </span>
-        </div>
-        <button
-          onClick={async () => {
-            setCfSolving(true)
-            try {
-              const res = await fetch('/api/cf/solve', { method: 'POST' })
-              const data = await res.json() as { success?: boolean; expiresIn?: number; error?: string }
-              if (data.success) {
-                setCfStatus({ valid: true, expiresIn: data.expiresIn ?? 1800 })
-                setSyncResult({ success: true, message: 'Cloudflare challenge solved' })
-              } else {
-                setSyncResult({ success: false, message: data.error ?? 'Failed to solve Cloudflare challenge' })
-              }
-            } catch {
-              setSyncResult({ success: false, message: 'Failed to reach server for CF solve' })
-            } finally {
-              setCfSolving(false)
-            }
-          }}
-          disabled={cfSolving}
-          className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
-                     hover:bg-white/15 transition-colors disabled:opacity-40"
-        >
-          {cfSolving ? 'Solving...' : 'Solve Cloudflare Challenge'}
-        </button>
-      </section>
+      {!hostedMode && (
+        <>
+          {/* Cloudflare Status */}
+          <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
+            <h2 className="text-sm font-bold text-white mb-3">Cloudflare Clearance</h2>
+            <p className="text-xs text-gray-400 mb-3">
+              HSReplay uses Cloudflare protection. A valid clearance is required for collection sync and meta stats.
+            </p>
+            <div className="flex items-center gap-3 mb-3">
+              <div className={`w-2.5 h-2.5 rounded-full ${cfStatus?.valid ? 'bg-green-400' : 'bg-red-400'}`} />
+              <span className="text-sm text-gray-300">
+                {cfStatus === null
+                  ? 'Checking...'
+                  : cfStatus.valid
+                    ? `Active (expires in ${Math.round(cfStatus.expiresIn / 60)}m)`
+                    : 'Expired or not solved'}
+              </span>
+            </div>
+            <button
+              onClick={async () => {
+                setCfSolving(true)
+                try {
+                  const res = await fetch('/api/cf/solve', { method: 'POST' })
+                  const data = await res.json() as { success?: boolean; expiresIn?: number; error?: string }
+                  if (data.success) {
+                    setCfStatus({ valid: true, expiresIn: data.expiresIn ?? 1800 })
+                    setSyncResult({ success: true, message: 'Cloudflare challenge solved' })
+                  } else {
+                    setSyncResult({ success: false, message: data.error ?? 'Failed to solve Cloudflare challenge' })
+                  }
+                } catch {
+                  setSyncResult({ success: false, message: 'Failed to reach server for CF solve' })
+                } finally {
+                  setCfSolving(false)
+                }
+              }}
+              disabled={cfSolving}
+              className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
+                         hover:bg-white/15 transition-colors disabled:opacity-40"
+            >
+              {cfSolving ? 'Solving...' : 'Solve Cloudflare Challenge'}
+            </button>
+          </section>
+        </>
+      )}
 
       {/* General status */}
       {syncResult && !syncLoading && !syncResult.message.includes('synced:') && (
