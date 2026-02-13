@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import Layout from './components/Layout.tsx'
 import CollectionView from './views/CollectionView.tsx'
 import CalculatorView from './views/CalculatorView.tsx'
@@ -8,12 +8,16 @@ import PackAdvisorView from './views/PackAdvisorView.tsx'
 import DisenchantAdvisorView from './views/DisenchantAdvisorView.tsx'
 import HistoryView from './views/HistoryView.tsx'
 import SettingsView from './views/SettingsView.tsx'
+import OnboardingPopup from './components/OnboardingPopup.tsx'
 import { useStore } from './stores/store.ts'
 import { useCollectionSnapshots } from './hooks/useCollectionSnapshots.ts'
+import { api, getStoredToken, getStoredAccountId, setStoredAccountId } from './services/api.ts'
+import { migrateLocalStorage } from './utils/localStorageMigration.ts'
 
 const TWO_HOURS = 2 * 60 * 60 * 1000
 
 export default function App() {
+  const [authenticated, setAuthenticated] = useState(() => !!getStoredToken())
   const fetchCards = useStore(s => s.fetchCards)
   const fetchCollection = useStore(s => s.fetchCollection)
   const fetchExpansions = useStore(s => s.fetchExpansions)
@@ -23,7 +27,18 @@ export default function App() {
   useCollectionSnapshots()
 
   useEffect(() => {
+    if (!authenticated) return
+
     async function init() {
+      if (!getStoredAccountId()) {
+        try {
+          const me = await api.getMe()
+          setStoredAccountId(me.accountLo)
+          migrateLocalStorage(me.accountLo)
+          useStore.getState().reloadCraftQueue()
+        } catch { /* 401 will redirect */ }
+      }
+
       await Promise.all([
         fetchCards(),
         fetchCollection(),
@@ -32,10 +47,10 @@ export default function App() {
         fetchVariantAvailability(),
       ])
 
-      const { collection, hsSessionId, syncCollection, addToast } = useStore.getState()
+      const { collection, syncCollection, addToast } = useStore.getState()
       const syncedAt = collection?.syncedAt
       const isStale = !syncedAt || (Date.now() - syncedAt > TWO_HOURS)
-      if (!isStale || !hsSessionId) return
+      if (!isStale) return
 
       try {
         const result = await syncCollection()
@@ -46,7 +61,11 @@ export default function App() {
     }
 
     init()
-  }, [fetchCards, fetchCollection, fetchExpansions, fetchMeta, fetchVariantAvailability])
+  }, [authenticated, fetchCards, fetchCollection, fetchExpansions, fetchMeta, fetchVariantAvailability])
+
+  if (!authenticated) {
+    return <OnboardingPopup onComplete={() => setAuthenticated(true)} />
+  }
 
   return (
     <Layout>

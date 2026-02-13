@@ -147,8 +147,8 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
   const [artVariant, setArtVariant] = useState<ArtVariant>(defaultVariant)
 
   const artUrl = artVariant === 'normal'
-    ? `/api/card-art/${card.id}/normal-lg`
-    : `/api/card-art/${card.id}/${artVariant}`
+    ? `/art/${card.id}_normal-lg.png`
+    : `/art/${card.id}_${artVariant}.png`
 
   const normalChances = useMemo((): PackProbability[] => {
     if (card.normalCount >= card.maxCopies) return []
@@ -278,8 +278,8 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
               alt={card.name}
               className="absolute inset-0 w-full h-full object-cover object-top"
               onError={e => {
-                const fallback = `/api/card-art/${card.id}/normal-lg`
-                if (!(e.target as HTMLImageElement).src.endsWith('/normal-lg')) {
+                const fallback = `/art/${card.id}_normal-lg.png`
+                if (!(e.target as HTMLImageElement).src.endsWith('_normal-lg.png')) {
                   (e.target as HTMLImageElement).src = fallback
                 }
               }}

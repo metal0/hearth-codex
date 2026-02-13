@@ -2,6 +2,8 @@
 
 Track your Hearthstone collection, calculate pack costs, and optimize your crafting strategy.
 
+**Hosted version available at [codex.i0.tf](https://codex.i0.tf)**
+
 ## Features
 
 - **Collection Browser** — View your entire collection with card art across all variants (normal, golden, signature, diamond). Filter by expansion, rarity, mana cost, class, and ownership. Hearthstone-style search syntax (`attack:5`, `health:3`, `mana:7`).

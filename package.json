@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:server": "node --experimental-strip-types --watch server/index.ts",
+    "dev:server": "node --experimental-strip-types --watch-path=server server/index.ts",
     "dev:client": "vite",
     "build": "vite build",
     "preview": "node --experimental-strip-types server/index.ts",

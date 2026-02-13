@@ -1,21 +1,23 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../stores/store.ts'
 import type { CollectionSnapshot } from '../types.ts'
+import { api } from '../services/api.ts'
 
-const STORAGE_KEY = 'hs-collection-snapshots'
-const MAX_SNAPSHOTS = 365
+let snapshotCache: CollectionSnapshot[] | null = null
 
-export function loadSnapshots(): CollectionSnapshot[] {
+export async function loadSnapshots(): Promise<CollectionSnapshot[]> {
+  if (snapshotCache) return snapshotCache
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) : []
+    snapshotCache = await api.getSnapshots()
+    return snapshotCache
   } catch {
     return []
   }
 }
 
-export function clearSnapshots() {
-  localStorage.removeItem(STORAGE_KEY)
+export async function clearSnapshots(): Promise<void> {
+  await api.clearSnapshots()
+  snapshotCache = null
 }
 
 function buildDiffMessage(prev: CollectionSnapshot, next: CollectionSnapshot): string | null {
@@ -97,25 +99,21 @@ export function useCollectionSnapshots() {
       expansions: Array.from(expMap.entries()).map(([code, stats]) => ({ code, ...stats })),
     }
 
-    const existing = loadSnapshots()
-    const prev = existing.length > 0 ? existing[existing.length - 1] : null
+    ;(async () => {
+      const existing = await loadSnapshots()
+      const prev = existing.length > 0 ? existing[existing.length - 1] : null
 
-    if (prev) {
-      const diff = buildDiffMessage(prev, snapshot)
-      if (diff) {
-        addToast(`Since last sync: ${diff}`, 'success')
+      if (prev) {
+        const diff = buildDiffMessage(prev, snapshot)
+        if (diff) {
+          addToast(`Since last sync: ${diff}`, 'success')
+        }
       }
-    }
 
-    const deduped = existing.filter(s => s.timestamp !== collectionSyncedAt)
-    const updated = [...deduped, snapshot]
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(-MAX_SNAPSHOTS)
-
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
-    } catch {
-      // localStorage quota exceeded — silently fail
-    }
+      try {
+        await api.saveSnapshot(snapshot)
+        snapshotCache = null
+      } catch { /* server error — skip */ }
+    })()
   }, [collectionSyncedAt])
 }

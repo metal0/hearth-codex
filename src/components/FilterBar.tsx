@@ -101,7 +101,7 @@ export default function FilterBar() {
     <div className="sticky top-0 z-10 bg-navy/95 backdrop-blur-sm border-b border-white/10 px-4 py-3 flex flex-wrap gap-2 items-center">
       <input
         type="text"
-        placeholder="missing legendary, mana:5..."
+        placeholder="Search..."
         value={searchText}
         onChange={e => setSearchText(e.target.value)}
         className="bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm w-48

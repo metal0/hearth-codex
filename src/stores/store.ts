@@ -7,28 +7,21 @@ import { RARITY_ORDER, DUST_COST, HS_CLASSES } from '../types.ts';
 
 const CLASS_ORDER = Object.fromEntries(HS_CLASSES.map((c, i) => [c, i === 0 ? 99 : i])) as Record<string, number>;
 
-const CRAFT_QUEUE_KEY = 'hs-craft-queue';
+import { api, clearStoredToken, getStoredAccountId } from '../services/api.ts';
+
+function craftQueueKey(): string {
+  const acct = getStoredAccountId();
+  return acct ? `hs-craft-queue-${acct}` : 'hs-craft-queue';
+}
 function loadCraftQueue(): string[] {
   try {
-    const raw = localStorage.getItem(CRAFT_QUEUE_KEY);
+    const raw = localStorage.getItem(craftQueueKey());
     return raw ? JSON.parse(raw) : [];
   } catch { return []; }
 }
 function saveCraftQueue(queue: string[]) {
-  try { localStorage.setItem(CRAFT_QUEUE_KEY, JSON.stringify(queue)); } catch {}
+  try { localStorage.setItem(craftQueueKey(), JSON.stringify(queue)); } catch {}
 }
-
-const HS_SESSION_KEY = 'hs-session-id';
-function loadSessionId(): string | null {
-  try { return localStorage.getItem(HS_SESSION_KEY) || null; } catch { return null; }
-}
-function saveSessionId(id: string | null) {
-  try {
-    if (id) localStorage.setItem(HS_SESSION_KEY, id);
-    else localStorage.removeItem(HS_SESSION_KEY);
-  } catch {}
-}
-import { api } from '../services/api.ts';
 import { parseSearch } from '../utils/searchParser.ts';
 import CalculatorWorker from '../workers/calculator.worker.ts?worker';
 
@@ -104,13 +97,15 @@ interface AppState {
   setSortBy: (sort: SortOption) => void;
   toggleSortDirection: () => void;
 
-  hsSessionId: string | null;
-  setHsSessionId: (id: string | null) => void;
+  battletag: string | null;
+  setBattletag: (tag: string | null) => void;
+  logout: () => void;
 
   craftQueue: string[];
   addToQueue: (dbfId: string) => void;
   removeFromQueue: (dbfId: string) => void;
   clearQueue: () => void;
+  reloadCraftQueue: () => void;
 
   getEnrichedCards: () => EnrichedCard[];
   getFilteredCards: () => EnrichedCard[];
@@ -151,8 +146,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   calculatorResults: null,
 
-  hsSessionId: loadSessionId(),
-  setHsSessionId: (id) => { saveSessionId(id); set({ hsSessionId: id }); },
+  battletag: null,
+  setBattletag: (tag) => set({ battletag: tag }),
+  logout: () => { clearStoredToken(); window.location.reload(); },
 
   craftQueue: loadCraftQueue(),
   addToQueue: (dbfId) => set(s => {
@@ -167,6 +163,7 @@ export const useStore = create<AppState>((set, get) => ({
     return { craftQueue: next };
   }),
   clearQueue: () => { saveCraftQueue([]); set({ craftQueue: [] }); },
+  reloadCraftQueue: () => set({ craftQueue: loadCraftQueue() }),
 
   fetchCards: async () => {
     set({ cardsLoading: true });
@@ -231,8 +228,7 @@ export const useStore = create<AppState>((set, get) => ({
   syncCollection: async (sessionId?: string) => {
     set({ syncLoading: true });
     try {
-      const sid = sessionId || get().hsSessionId || undefined;
-      const result = await api.syncCollection(sid);
+      const result = await api.syncCollection(sessionId);
       if (result.success) {
         if (result.dbRefreshed) {
           await get().fetchCards();
@@ -362,7 +358,7 @@ export const useStore = create<AppState>((set, get) => ({
           totalOwned = Math.min(normal + golden + diamond + signature, maxCopies);
       }
 
-      const art = (v: string) => `/api/card-art/${card.id}/${v}`
+      const art = (v: string) => `/art/${card.id}_${v}.png`
       const bestOwned =
         diamond > 0 ? art('diamond')
         : signature > 0 ? art('signature')

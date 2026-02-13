@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { useStore } from '../stores/store.ts'
 import { loadSnapshots, clearSnapshots } from '../hooks/useCollectionSnapshots.ts'
 import { Dropdown } from '../components/FilterBar.tsx'
+import type { CollectionSnapshot } from '../types.ts'
 
 const TOOLTIP_STYLE = {
   contentStyle: {
@@ -34,7 +35,12 @@ export default function HistoryView() {
   const [timeRange, setTimeRange] = useState<TimeRange>('all')
   const [selectedExpansion, setSelectedExpansion] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
-  const [refreshKey, setRefreshKey] = useState(0)
+  const [snapshots, setSnapshots] = useState<CollectionSnapshot[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    loadSnapshots().then(s => { setSnapshots(s); setLoading(false) })
+  }, [])
 
   const setOptions = useMemo(() => [
     { value: '', label: 'Select expansion...' },
@@ -43,8 +49,6 @@ export default function HistoryView() {
       label: `${exp.name}${exp.standard ? ' (S)' : ''}`,
     })),
   ], [expansions])
-
-  const snapshots = useMemo(() => loadSnapshots(), [refreshKey])
 
   const filtered = useMemo(() => {
     const cutoff = RANGES.find(r => r.key === timeRange)!.ms
@@ -76,6 +80,15 @@ export default function HistoryView() {
       }
     })
   }, [filtered, selectedExpansion])
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <h1 className="text-xl font-bold text-gold mb-6">Collection History</h1>
+        <p className="text-gray-500">Loading snapshots...</p>
+      </div>
+    )
+  }
 
   if (snapshots.length === 0) {
     return (
@@ -170,7 +183,7 @@ export default function HistoryView() {
           <div className="flex items-center gap-3">
             <span className="text-sm text-red-400">Clear all history? This cannot be undone.</span>
             <button
-              onClick={() => { clearSnapshots(); setConfirmClear(false); setRefreshKey(k => k + 1) }}
+              onClick={async () => { await clearSnapshots(); setSnapshots([]); setConfirmClear(false) }}
               className="px-3 py-1.5 bg-red-600/30 text-red-400 border border-red-600/30 rounded text-sm hover:bg-red-600/40"
             >
               Confirm

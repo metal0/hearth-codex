@@ -10,23 +10,65 @@ import {
   type CardDb,
 } from './data.ts';
 import { ensureCfReady, fetchThroughBrowser, setSessionCookie, getCfStatus, clearCfSession } from './cloudflare.ts';
+import { initAuth, resolveUserByToken, createUser, updateSessionId, getAllUsers, purgeInactiveUsers, type TokenData } from './auth.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
 const CARD_DB_PATH = join(DATA_DIR, 'card-db.json');
-const COLLECTION_PATH = join(DATA_DIR, 'my-collection.json');
-const SETTINGS_PATH = join(DATA_DIR, 'settings.json');
 const META_PATH = join(DATA_DIR, 'meta-stats.json');
 const PORT = parseInt(process.env.PORT || '4000');
 
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+initAuth(DATA_DIR);
 
 const CARD_ART_CACHE = join(DATA_DIR, 'card-art-cache');
 mkdirSync(CARD_ART_CACHE, { recursive: true });
 
+const ART_SOURCES: Record<string, (id: string) => string> = {
+  normal: (id) => `https://art.hearthstonejson.com/v1/render/latest/enUS/256x/${id}.png`,
+  'normal-lg': (id) => `https://art.hearthstonejson.com/v1/render/latest/enUS/512x/${id}.png`,
+  golden: (id) => `https://hearthstone.wiki.gg/images/${id}_Premium1.png`,
+  signature: (id) => `https://hearthstone.wiki.gg/images/${id}_Premium3.png`,
+  diamond: (id) => `https://hearthstone.wiki.gg/images/${id}_Premium2.png`,
+};
+
 const startedAt = Date.now();
 const app = express();
 app.use(express.json());
+
+app.use('/art', express.static(CARD_ART_CACHE, {
+  maxAge: '7d',
+  immutable: true,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+  },
+}));
+
+app.get('/art/:filename', async (req, res) => {
+  const match = req.params.filename.match(/^(.+)_([a-z]+(?:-lg)?)\.png$/);
+  if (!match) { res.status(400).end(); return; }
+  const [, cardId, variant] = match;
+  const sourceFn = ART_SOURCES[variant];
+  if (!sourceFn) { res.status(400).end(); return; }
+
+  const cacheKey = `${cardId}_${variant}`;
+  const missFile = join(CARD_ART_CACHE, `${cacheKey}.miss`);
+  if (existsSync(missFile)) {
+    res.set('Cache-Control', 'public, max-age=604800');
+    res.status(404).end();
+    return;
+  }
+
+  const buffer = await fetchAndCacheArt(cacheKey, sourceFn(cardId));
+  if (buffer) {
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=604800, immutable');
+    res.send(buffer);
+  } else {
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.status(404).end();
+  }
+});
 
 let cardDb: CardDb | null = null;
 
@@ -34,15 +76,83 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', uptime: Math.round((Date.now() - startedAt) / 1000), cardDbLoaded: !!cardDb });
 });
 
-function loadSettings(): Record<string, unknown> {
-  if (!existsSync(SETTINGS_PATH)) return {};
-  try {
-    return JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8'));
-  } catch {
-    return {};
-  }
+interface AuthRequest extends express.Request {
+  userId?: string;
+  userDir?: string;
 }
 
+function authenticateUser(req: AuthRequest, res: express.Response, next: express.NextFunction): void {
+  const token = req.headers['x-user-token'] as string | undefined;
+  if (!token) { res.status(401).json({ error: 'Authentication required' }); return; }
+  const user = resolveUserByToken(token);
+  if (!user) { res.status(401).json({ error: 'Invalid or expired token' }); return; }
+  req.userId = user.accountLo;
+  req.userDir = user.userDir;
+  next();
+}
+
+app.post('/api/auth/register', async (req, res) => {
+  const sessionId = req.body?.sessionId;
+  if (!sessionId) {
+    res.status(400).json({ error: 'sessionId is required' });
+    return;
+  }
+
+  try {
+    await setSessionCookie(sessionId);
+    const acctResult = await fetchThroughBrowser('https://hsreplay.net/api/v1/account/');
+    if (acctResult.status === 401) {
+      res.status(400).json({ error: 'Invalid or expired HSReplay session cookie. Please get a fresh sessionid.' });
+      return;
+    }
+    if (acctResult.status !== 200) {
+      res.status(502).json({ error: `HSReplay returned ${acctResult.status}` });
+      return;
+    }
+
+    const acctData = JSON.parse(acctResult.body);
+    const blizzAccounts = acctData?.blizzard_accounts;
+    if (!Array.isArray(blizzAccounts) || blizzAccounts.length === 0) {
+      res.status(400).json({ error: 'No Blizzard account linked to HSReplay' });
+      return;
+    }
+
+    const acct = blizzAccounts[0];
+    const accountLo = String(acct.account_lo);
+    const battletag = acct.battletag || `Player#${accountLo}`;
+    const region = acct.region || 0;
+
+    const user = createUser(accountLo, battletag, region, sessionId);
+
+    let collectionUrl = 'https://hsreplay.net/api/v1/collection/';
+    const params = new URLSearchParams();
+    if (acct.account_lo) params.set('account_lo', accountLo);
+    if (acct.region) params.set('region', String(region));
+    collectionUrl += `?${params.toString()}`;
+
+    const collResult = await fetchThroughBrowser(collectionUrl);
+    let cards = 0;
+    let dust = 0;
+    if (collResult.status === 200) {
+      const data = JSON.parse(collResult.body);
+      writeFileSync(join(user.userDir, 'collection.json'), JSON.stringify(data, null, 2));
+      cards = Object.keys(data.collection || {}).length;
+      dust = data.dust || 0;
+    }
+
+    res.json({ success: true, token: user.tokenData.token, battletag, accountLo, cards, dust });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/auth/me', authenticateUser, (req: AuthRequest, res) => {
+  const tokenPath = join(req.userDir!, 'token.json');
+  if (!existsSync(tokenPath)) { res.status(404).json({ error: 'User not found' }); return; }
+  const data: TokenData = JSON.parse(readFileSync(tokenPath, 'utf-8'));
+  res.json({ battletag: data.battletag, accountLo: data.accountLo, region: data.region });
+});
 
 app.get('/api/data-status', (_req, res) => {
   const cardDbAge = existsSync(CARD_DB_PATH) ? statSync(CARD_DB_PATH).mtimeMs : 0;
@@ -101,13 +211,14 @@ app.get('/api/expansions', (_req, res) => {
   res.json(getAllExpansions());
 });
 
-app.get('/api/collection', (_req, res) => {
-  if (!existsSync(COLLECTION_PATH)) {
+app.get('/api/collection', authenticateUser, (req: AuthRequest, res) => {
+  const collPath = join(req.userDir!, 'collection.json');
+  if (!existsSync(collPath)) {
     res.json({ collection: {}, dust: 0, syncedAt: null });
     return;
   }
-  const data = JSON.parse(readFileSync(COLLECTION_PATH, 'utf-8'));
-  const { mtimeMs } = statSync(COLLECTION_PATH);
+  const data = JSON.parse(readFileSync(collPath, 'utf-8'));
+  const { mtimeMs } = statSync(collPath);
   res.json({ ...data, syncedAt: mtimeMs });
 });
 
@@ -130,10 +241,13 @@ app.get('/api/cf/status', (_req, res) => {
   res.json(getCfStatus());
 });
 
-app.post('/api/collection/sync', async (req, res) => {
-  const sessionId = req.body?.sessionId;
+app.post('/api/collection/sync', authenticateUser, async (req: AuthRequest, res) => {
+  const tokenPath = join(req.userDir!, 'token.json');
+  const tokenData: TokenData = JSON.parse(readFileSync(tokenPath, 'utf-8'));
+  const sessionId = req.body?.sessionId || tokenData.sessionId;
+
   if (!sessionId) {
-    res.status(400).json({ error: 'No HSReplay session cookie configured' });
+    res.status(400).json({ error: 'No HSReplay session cookie available. Re-authenticate in Settings.' });
     return;
   }
 
@@ -142,7 +256,7 @@ app.post('/api/collection/sync', async (req, res) => {
 
     const acctResult = await fetchThroughBrowser('https://hsreplay.net/api/v1/account/');
     if (acctResult.status === 401) {
-      res.status(401).json({ error: 'Session cookie expired. Please update it in Settings.' });
+      res.status(401).json({ error: 'HSReplay session expired. Please update it in Settings.', sessionExpired: true });
       return;
     }
 
@@ -156,8 +270,11 @@ app.post('/api/collection/sync', async (req, res) => {
         if (acct.account_lo) params.set('account_lo', String(acct.account_lo));
         if (acct.region) params.set('region', String(acct.region));
         collectionUrl += `?${params.toString()}`;
-        console.log(`[Sync] Using account_lo=${acct.account_lo}, region=${acct.region}`);
       }
+    }
+
+    if (req.body?.sessionId && req.body.sessionId !== tokenData.sessionId) {
+      updateSessionId(req.userId!, req.body.sessionId);
     }
 
     const result = await fetchThroughBrowser(collectionUrl);
@@ -167,8 +284,9 @@ app.post('/api/collection/sync', async (req, res) => {
       return;
     }
 
+    const collPath = join(req.userDir!, 'collection.json');
     const data = JSON.parse(result.body);
-    writeFileSync(COLLECTION_PATH, JSON.stringify(data, null, 2));
+    writeFileSync(collPath, JSON.stringify(data, null, 2));
     const collection = data.collection as Record<string, unknown> | undefined;
     const dust = data.dust as number | undefined;
 
@@ -176,7 +294,7 @@ app.post('/api/collection/sync', async (req, res) => {
     if (collection && cardDb) {
       const unknownIds = Object.keys(collection).filter(id => !cardDb![id]);
       if (unknownIds.length > 10) {
-        console.log(`[Sync] ${unknownIds.length} unknown dbfIds in collection — refreshing card DB`);
+        console.log(`[Sync] ${unknownIds.length} unknown dbfIds — refreshing card DB`);
         try {
           const { db } = await fetchAndCacheCardDb();
           cardDb = db;
@@ -324,24 +442,53 @@ app.post('/api/meta/refresh', async (_req, res) => {
   }
 });
 
-app.get('/api/settings', (_req, res) => {
-  res.json(loadSettings());
+app.get('/api/settings', authenticateUser, (req: AuthRequest, res) => {
+  const settingsPath = join(req.userDir!, 'settings.json');
+  if (!existsSync(settingsPath)) { res.json({}); return; }
+  try { res.json(JSON.parse(readFileSync(settingsPath, 'utf-8'))); }
+  catch { res.json({}); }
 });
 
-app.put('/api/settings', (req, res) => {
-  const current = loadSettings();
+app.put('/api/settings', authenticateUser, (req: AuthRequest, res) => {
+  const settingsPath = join(req.userDir!, 'settings.json');
+  let current: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    try { current = JSON.parse(readFileSync(settingsPath, 'utf-8')); } catch { /* empty */ }
+  }
   const updated = { ...current, ...req.body };
-  writeFileSync(SETTINGS_PATH, JSON.stringify(updated, null, 2));
+  writeFileSync(settingsPath, JSON.stringify(updated, null, 2));
   res.json(updated);
 });
 
-const ART_SOURCES: Record<string, (id: string) => string> = {
-  normal: (id) => `https://art.hearthstonejson.com/v1/render/latest/enUS/256x/${id}.png`,
-  'normal-lg': (id) => `https://art.hearthstonejson.com/v1/render/latest/enUS/512x/${id}.png`,
-  golden: (id) => `https://hearthstone.wiki.gg/images/${id}_Premium1.png`,
-  signature: (id) => `https://hearthstone.wiki.gg/images/${id}_Premium3.png`,
-  diamond: (id) => `https://hearthstone.wiki.gg/images/${id}_Premium2.png`,
-};
+const MAX_SNAPSHOTS = 365;
+
+app.get('/api/snapshots', authenticateUser, (req: AuthRequest, res) => {
+  const snapshotsPath = join(req.userDir!, 'snapshots.json');
+  if (!existsSync(snapshotsPath)) { res.json([]); return; }
+  try { res.json(JSON.parse(readFileSync(snapshotsPath, 'utf-8'))); }
+  catch { res.json([]); }
+});
+
+app.post('/api/snapshots', authenticateUser, (req: AuthRequest, res) => {
+  const snapshotsPath = join(req.userDir!, 'snapshots.json');
+  let existing: unknown[] = [];
+  if (existsSync(snapshotsPath)) {
+    try { existing = JSON.parse(readFileSync(snapshotsPath, 'utf-8')); } catch { /* empty */ }
+  }
+  const snapshot = req.body;
+  const deduped = (existing as Array<{ timestamp: number }>).filter(s => s.timestamp !== snapshot.timestamp);
+  const updated = [...deduped, snapshot]
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .slice(-MAX_SNAPSHOTS);
+  writeFileSync(snapshotsPath, JSON.stringify(updated));
+  res.json({ saved: true, count: updated.length });
+});
+
+app.delete('/api/snapshots', authenticateUser, (req: AuthRequest, res) => {
+  const snapshotsPath = join(req.userDir!, 'snapshots.json');
+  if (existsSync(snapshotsPath)) unlinkSync(snapshotsPath);
+  res.json({ cleared: true });
+});
 
 const pendingArtFetches = new Map<string, Promise<Buffer | null>>();
 
@@ -630,11 +777,23 @@ async function prefetchCardArt(db: CardDb): Promise<void> {
   const sigEligibleSets = new Set(expansions.filter(e => e.yearNum >= 2022).map(e => e.code));
 
   let collectionData: Record<string, number[]> = {};
-  if (existsSync(COLLECTION_PATH)) {
-    try {
-      const raw = JSON.parse(readFileSync(COLLECTION_PATH, 'utf-8'));
-      collectionData = raw.collection ?? {};
-    } catch { /* empty */ }
+  const usersPath = join(DATA_DIR, 'users');
+  if (existsSync(usersPath)) {
+    for (const dir of readdirSync(usersPath, { withFileTypes: true })) {
+      if (!dir.isDirectory()) continue;
+      const collPath = join(usersPath, dir.name, 'collection.json');
+      if (!existsSync(collPath)) continue;
+      try {
+        const raw = JSON.parse(readFileSync(collPath, 'utf-8'));
+        const coll = raw.collection ?? {};
+        for (const [id, counts] of Object.entries(coll) as [string, number[]][]) {
+          if (!collectionData[id]) { collectionData[id] = [...counts]; continue; }
+          for (let i = 0; i < counts.length; i++) {
+            collectionData[id][i] = Math.max(collectionData[id][i] || 0, counts[i] || 0);
+          }
+        }
+      } catch { /* skip */ }
+    }
   }
 
   const ownedCardIds = new Set<string>();
@@ -752,11 +911,124 @@ async function prefetchCardArt(db: CardDb): Promise<void> {
   console.log('[Prefetch] Card art prefetching complete');
 }
 
+const SYNC_INTERVAL = 12 * 60 * 60 * 1000;
+const PURGE_INTERVAL = 24 * 60 * 60 * 1000;
+
+async function syncUserCollection(userDir: string, sessionId: string): Promise<{ success: boolean; cards: number; dust: number; collection: Record<string, number[]> }> {
+  await setSessionCookie(sessionId);
+  const acctResult = await fetchThroughBrowser('https://hsreplay.net/api/v1/account/');
+  if (acctResult.status !== 200) return { success: false, cards: 0, dust: 0, collection: {} };
+
+  let collectionUrl = 'https://hsreplay.net/api/v1/collection/';
+  const acctData = JSON.parse(acctResult.body);
+  const blizzAccounts = acctData?.blizzard_accounts;
+  if (Array.isArray(blizzAccounts) && blizzAccounts.length > 0) {
+    const acct = blizzAccounts[0];
+    const params = new URLSearchParams();
+    if (acct.account_lo) params.set('account_lo', String(acct.account_lo));
+    if (acct.region) params.set('region', String(acct.region));
+    collectionUrl += `?${params.toString()}`;
+  }
+
+  const result = await fetchThroughBrowser(collectionUrl);
+  if (result.status !== 200) return { success: false, cards: 0, dust: 0, collection: {} };
+
+  const data = JSON.parse(result.body);
+  writeFileSync(join(userDir, 'collection.json'), JSON.stringify(data, null, 2));
+  return { success: true, cards: Object.keys(data.collection || {}).length, dust: data.dust ?? 0, collection: data.collection ?? {} };
+}
+
+function buildSnapshot(collection: Record<string, number[]>, dust: number, db: CardDb): object {
+  const expansions = getAllExpansions();
+  const standardCodes = new Set(expansions.filter(e => e.standard).map(e => e.code));
+
+  let overallOwned = 0, overallTotal = 0;
+  let standardOwned = 0, standardTotal = 0;
+  let wildOwned = 0, wildTotal = 0;
+  const expMap = new Map<string, { owned: number; total: number }>();
+
+  for (const [dbfId, card] of Object.entries(db)) {
+    const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2;
+    const counts = collection[dbfId] ?? [0, 0, 0, 0];
+    const owned = Math.min(counts[0] + counts[1] + (counts[2] ?? 0) + (counts[3] ?? 0), maxCopies);
+
+    overallOwned += owned;
+    overallTotal += maxCopies;
+
+    if (standardCodes.has(card.set)) {
+      standardOwned += owned;
+      standardTotal += maxCopies;
+    }
+
+    wildOwned += owned;
+    wildTotal += maxCopies;
+
+    const exp = expMap.get(card.set) || { owned: 0, total: 0 };
+    exp.owned += owned;
+    exp.total += maxCopies;
+    expMap.set(card.set, exp);
+  }
+
+  return {
+    timestamp: Date.now(),
+    dust,
+    overall: { owned: overallOwned, total: overallTotal },
+    standard: { owned: standardOwned, total: standardTotal },
+    wild: { owned: wildOwned, total: wildTotal },
+    expansions: Array.from(expMap.entries()).map(([code, stats]) => ({ code, ...stats })),
+  };
+}
+
+function saveSnapshotForUser(userDir: string, snapshot: object): void {
+  const snapshotsPath = join(userDir, 'snapshots.json');
+  let existing: unknown[] = [];
+  if (existsSync(snapshotsPath)) {
+    try { existing = JSON.parse(readFileSync(snapshotsPath, 'utf-8')); } catch { /* empty */ }
+  }
+  const updated = [...existing, snapshot]
+    .sort((a: any, b: any) => a.timestamp - b.timestamp)
+    .slice(-MAX_SNAPSHOTS);
+  writeFileSync(snapshotsPath, JSON.stringify(updated));
+}
+
+async function autoSyncAllUsers(): Promise<void> {
+  const users = getAllUsers();
+  if (users.length === 0) return;
+
+  console.log(`[AutoSync] Checking ${users.length} user(s)`);
+  for (const user of users) {
+    const collPath = join(user.userDir, 'collection.json');
+    if (existsSync(collPath)) {
+      const { mtimeMs } = statSync(collPath);
+      if (Date.now() - mtimeMs < SYNC_INTERVAL) continue;
+    }
+
+    try {
+      const result = await syncUserCollection(user.userDir, user.tokenData.sessionId);
+      if (result.success) {
+        console.log(`[AutoSync] ${user.tokenData.battletag}: synced ${result.cards} cards`);
+        if (cardDb) {
+          const snapshot = buildSnapshot(result.collection, result.dust, cardDb);
+          saveSnapshotForUser(user.userDir, snapshot);
+          console.log(`[AutoSync] ${user.tokenData.battletag}: snapshot saved`);
+        }
+      } else {
+        console.log(`[AutoSync] ${user.tokenData.battletag}: sync failed (session may be expired)`);
+      }
+    } catch (err) {
+      console.error(`[AutoSync] ${user.tokenData.battletag}: error`, err);
+    }
+  }
+}
+
 initExpansions().then(async exps => {
   console.log(`Loaded ${exps.length} expansions (${exps.filter(e => e.standard).length} Standard)`);
   app.listen(PORT, () => {
     console.log(`Hearth Codex API: http://localhost:${PORT}`);
   });
+
+  setInterval(() => { autoSyncAllUsers().catch(err => console.error('[AutoSync] Error:', err)); }, SYNC_INTERVAL);
+  setInterval(() => { purgeInactiveUsers(); }, PURGE_INTERVAL);
 
   if (!cardDb) cardDb = await getCardDb();
   if (!process.env.DISABLE_ART_PREFETCH) {

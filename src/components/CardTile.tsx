@@ -10,7 +10,7 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
   const isComplete = card.totalOwned >= card.maxCopies
   const isPartial = card.totalOwned > 0 && !isComplete
   const isUnowned = card.totalOwned === 0
-  const fallbackUrl = `/api/card-art/${card.id}/normal`
+  const fallbackUrl = `/art/${card.id}_normal.png`
   const isVariant = card.imageUrl !== fallbackUrl
 
   useEffect(() => {

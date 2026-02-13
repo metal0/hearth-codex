@@ -1,16 +1,16 @@
-# Hearthstone Collection Tracker — Product Specification
+# Hearth Codex — Hearthstone Collection Tracker
 
 ## Overview
 
-A local-only web application that tracks your full Hearthstone card collection with proper card renders, rich filtering, meta-aware craft/pack prioritization, a pack completion calculator with strategy comparison, and a card art caching proxy — all running on localhost with no external accounts required beyond a one-time HSReplay cookie paste.
+A multi-user web application that tracks Hearthstone card collections with proper card renders, rich filtering, meta-aware craft/pack prioritization, a pack completion calculator with strategy comparison, and a card art caching proxy. Users authenticate via HSReplay session cookie; all user data is stored server-side with automatic cleanup after 90 days of inactivity.
 
 ## Architecture
 
 ### Stack
 - **Frontend**: React 19 + Vite 6 (TypeScript), Tailwind CSS 4, Zustand 5 state management, Recharts 2 for charts
 - **Backend**: Node.js 22 with Express 5 — API server for data fetching, caching, simulation, and serving the SPA
-- **Storage**: Filesystem (`data/` folder) as source of truth
-- **No npm auth dependencies**: Collection sync uses cookie-paste approach
+- **Storage**: Filesystem (`data/` folder) — shared data + per-user directories
+- **Auth**: Token-based (64-char hex), no passwords — HSReplay sessionId as registration key
 
 ### Data Sources
 | Data | Source | Refresh Strategy |
@@ -18,42 +18,61 @@ A local-only web application that tracks your full Hearthstone card collection w
 | Card database (names, stats) | HearthstoneJSON API (`api.hearthstonejson.com`) | Auto on startup if >24h stale |
 | Card art (normal) | HearthstoneJSON CDN (`art.hearthstonejson.com`) | Proxied and cached server-side |
 | Card art (golden/signature/diamond) | `hearthstone.wiki.gg` Premium1/2/3 images | Proxied and cached server-side |
-| User collection | HSReplay API via saved session cookie + Cloudflare bypass | Manual trigger + auto-sync if >2h stale |
+| User collection | HSReplay API via saved session cookie + Cloudflare bypass | Manual trigger + server auto-sync every 12h for active users |
 | Meta/usage stats (standard + wild) | HSReplay `card_list_free` endpoint | Auto on startup if >24h stale, manual refresh |
 
 ### Server Responsibilities
 - Serve the React SPA (production build from `dist/`)
 - Proxy HSReplay API calls via puppeteer-stealth Cloudflare bypass
-- Proxy and cache all card art (normal, golden, signature, diamond variants)
+- Serve card art as static files with CDN-ready cache headers
 - Background prefetch all card art on startup
 - Cache card DB + meta stats + art to filesystem (`data/`)
 - Run Monte Carlo pack simulations (offloaded to server to avoid blocking UI)
+- Manage per-user data (collection, snapshots, settings) with token auth
+- Auto-sync collections every 12h for users active within 48h
+- Purge inactive user data after 90 days of no activity
 - Expose REST endpoints for the frontend
 
 ### API Endpoints
+
+**Public (no auth required):**
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/api/health` | GET | Server status and uptime |
 | `/api/cards` | GET | Full card database |
 | `/api/cards/refresh` | POST | Re-fetch card DB from HearthstoneJSON, clear art cache |
 | `/api/expansions` | GET | Dynamic expansion list derived from card DB |
-| `/api/collection` | GET | User's collection data |
-| `/api/collection/sync` | POST | Trigger HSReplay sync using stored cookie |
 | `/api/meta` | GET | Card meta stats (standard + wild), auto-refreshes if >4h stale |
 | `/api/meta/refresh` | POST | Force refresh meta stats |
 | `/api/calculator` | POST | Run pack simulation with strategy comparison |
-| `/api/settings` | GET/PUT | App settings (session cookie) |
 | `/api/data-status` | GET | Card DB age, meta age, CF clearance status |
-| `/api/card-art/:cardId/:variant` | GET | Proxied card art with server-side caching |
-| `/api/card-art/cache-stats` | GET | Per-variant cache statistics (cached/missed counts) |
-| `/api/card-art/clear-cache` | POST | Clear all cached card art |
 | `/api/prefetch-status` | GET | Background prefetch progress |
 | `/api/variant-availability` | GET | Lists cards confirmed missing signature/diamond variants |
+| `/api/card-art/cache-stats` | GET | Per-variant cache statistics (cached/missed counts) |
+| `/api/card-art/clear-cache` | POST | Clear all cached card art |
 | `/api/cf/solve` | POST | Trigger Cloudflare challenge solve |
 | `/api/cf/status` | GET | Cloudflare clearance status |
+| `/art/{cardId}_{variant}.png` | GET | Static card art (express.static + fallback fetch) |
+
+**Auth endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/auth/register` | POST | Validate HSReplay sessionId, create/find user, return token |
+| `/api/auth/me` | GET | Current user info (battletag, accountLo, region) |
+
+**Authenticated (requires `X-User-Token` header):**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/collection` | GET | User's collection data |
+| `/api/collection/sync` | POST | Trigger HSReplay sync using user's stored session |
+| `/api/snapshots` | GET | User's collection history snapshots |
+| `/api/snapshots` | POST | Save a new collection snapshot (365 cap per user) |
+| `/api/snapshots` | DELETE | Clear all user snapshots |
+| `/api/settings` | GET/PUT | Per-user settings |
 
 ## Card Art System
 
-All card art is served through the server as a caching proxy. No direct external art requests from the frontend.
+Card art is served as static files at `/art/{cardId}_{variant}.png` via `express.static` with CDN-ready cache headers. A fallback handler fetches missing art on-demand from upstream sources.
 
 ### Art Sources
 | Variant | Source | URL Pattern |
@@ -64,11 +83,15 @@ All card art is served through the server as a caching proxy. No direct external
 | `diamond` | wiki.gg | `hearthstone.wiki.gg/images/{id}_Premium2.png` |
 | `signature` | wiki.gg | `hearthstone.wiki.gg/images/{id}_Premium3.png` |
 
+### Static Serving
+- `express.static(data/card-art-cache/)` at `/art/` with `Cache-Control: public, max-age=604800, immutable`
+- Fallback route `/art/:filename` parses `{cardId}_{variant}.png`, fetches from upstream on cache miss
+- Frontend requests art at `/art/{cardId}_{variant}.png` (no API proxy overhead)
+
 ### Caching
 - All art cached in `data/card-art-cache/` as `{cardId}_{variant}.png`
 - Confirmed 404s recorded as `.miss` files (prevents re-fetching known-missing variants)
-- Cached files served via `res.sendFile()` (async streaming, no event loop blocking)
-- Cache-Control: 7 days for cached/miss responses, 1 day for on-demand 404s
+- `.miss` files only created on confirmed 404 (not rate limits or timeouts)
 - Deduplication: concurrent requests for the same art share a single fetch promise
 
 ### Background Prefetcher
@@ -104,7 +127,7 @@ Cards without a variant in the selected mode show the normal art (greyed out if 
 
 ## Views & Navigation
 
-Persistent **sidebar** navigation with 5 views. Sidebar shows per-expansion completion bars (dust-weighted) with per-rarity breakdown tooltips.
+Persistent **sidebar** navigation with 8 views. Sidebar shows per-expansion completion bars (dust-weighted) with per-rarity breakdown tooltips.
 
 ### 1. Collection View (default `/`)
 
@@ -182,11 +205,25 @@ Per-expansion pack value analysis using meta stats to prioritize which packs to 
 - Class and rarity filters
 - Mode-aware ownership calculation
 
-### 5. Settings (`/settings`)
+### 6. Collection History (`/history`)
 
-**HSReplay Connection:**
-- Session cookie paste (sessionid from browser DevTools)
-- Save and sync buttons with progress indicator
+Timeline chart of collection completion over time. Snapshots saved server-side per user (365 max).
+
+- Dust-weighted completion percentage per snapshot
+- Recharts line chart visualization
+- Clear history button (deletes all snapshots)
+- Snapshots auto-saved on each collection sync
+
+### 7. Disenchant Advisor (`/disenchant`)
+
+Identifies safe-to-disenchant extras, accounting for free/uncraftable cards.
+
+### 8. Settings (`/settings`)
+
+**Account:**
+- Logged-in battletag display
+- Update HSReplay session (for expired cookies)
+- Logout button
 
 **Card Database:**
 - Refresh from HearthstoneJSON (also clears art cache)
@@ -212,13 +249,50 @@ Expansions are derived dynamically from the card database — no hardcoded card 
 - `applyStandardRotation()`: 2 most recent yearNums = Standard
 - New expansions auto-detected after "Refresh Card Database"
 
+## Multi-User System
+
+### Authentication
+- HSReplay `sessionid` cookie serves as registration key (no passwords)
+- Server validates by calling HSReplay account API, extracts Blizzard `account_lo` as user identity
+- Server issues a long-lived token (64-char hex via `crypto.randomBytes(32)`)
+- Client stores token in `localStorage`, sends `X-User-Token` header on every request
+- On 401 response (except `/auth/*` endpoints): client clears token and reloads → onboarding
+
+### Onboarding
+First-time visitors see a mandatory full-screen modal (no close button):
+1. Explains HSReplay.net account requirement and Hearthstone Deck Tracker
+2. Step-by-step instructions for getting sessionId from browser DevTools
+3. Paste input + "Connect" button
+4. On success: stores token + accountLo in localStorage, loads app
+5. On failure: shows server error message inline
+
+### Per-User Data
+```
+data/users/{account_lo}/
+  token.json          # { token, accountLo, battletag, region, sessionId, createdAt, lastSeenAt }
+  collection.json     # HSReplay collection data
+  snapshots.json      # Collection history (365 cap)
+  settings.json       # User preferences
+```
+
+### Data Lifecycle
+- **`lastSeenAt`** updated on every authenticated API request
+- **Auto-sync**: Server syncs collections every 12h for users active within the last 48h
+- **Auto-purge**: On startup, users with no activity for 90 days have their entire directory deleted (including collection, snapshots, settings, and token)
+- **Snapshots cap**: Maximum 365 snapshots per user; oldest deleted when limit exceeded
+
+### Session Management
+- Users can update expired HSReplay sessions via Settings → "Update Session"
+- Logout clears client token and reloads (server data preserved until 90-day purge)
+
 ## HSReplay Integration
 
 ### Collection Sync
-- Cookie-paste approach: user provides `sessionid` from browser DevTools
+- User provides `sessionid` during registration (validated server-side)
+- Server stores sessionId in user's `token.json`, uses it for all subsequent syncs
 - Server fetches `/api/v1/account/` to get Blizzard account params, then `/api/v1/collection/`
 - Collection format: `{ collection: { dbfId: [normal, golden, diamond, sig] }, dust: N }`
-- Auto-sync on app startup if collection is >2h stale
+- Auto-sync: server-side every 12h for active users (active = any API request within 48h)
 
 ### Meta Stats
 - Fetches `card_list_free` endpoint for RANKED_STANDARD and RANKED_WILD
@@ -269,7 +343,7 @@ interface EnrichedCard extends CardDbEntry {
   signatureCount: number;
   totalOwned: number;    // mode-aware ownership count
   maxCopies: number;     // 1 for legendary, 2 otherwise
-  imageUrl: string;      // /api/card-art/:id/:variant
+  imageUrl: string;      // /art/{id}_{variant}.png
   inclusionRate: number;
   winrate: number;
   decks: number;
@@ -307,25 +381,33 @@ interface ComparisonResult {
 hearthstone/
 ├── package.json
 ├── vite.config.ts
+├── index.html                 # SPA entry with SEO meta tags
+├── public/favicon.svg         # SVG favicon (gold hexagonal gem)
 ├── SPEC.md
 ├── data/                      # Persistent storage (git-ignored)
-│   ├── card-db.json           # HearthstoneJSON card database
-│   ├── my-collection.json     # User's collection
-│   ├── meta-stats.json        # Standard + Wild meta stats
-│   ├── settings.json          # App settings (session cookie)
-│   └── card-art-cache/        # Cached card art (png + miss files)
+│   ├── card-db.json           # HearthstoneJSON card database (shared)
+│   ├── meta-stats.json        # Standard + Wild meta stats (shared)
+│   ├── card-art-cache/        # Cached card art (shared, png + miss files)
+│   └── users/                 # Per-user data directories
+│       └── {account_lo}/
+│           ├── token.json     # Auth token + HSReplay session
+│           ├── collection.json
+│           ├── snapshots.json # Collection history (365 cap)
+│           └── settings.json
 ├── server/
-│   ├── index.ts               # Express server, all API routes, art proxy, prefetcher
+│   ├── index.ts               # Express server, API routes, art serving, prefetcher, auto-sync
+│   ├── auth.ts                # Token generation, user management, 90-day purge
 │   ├── data.ts                # Card data, expansions, collection parsing
 │   ├── simulator.ts           # Monte Carlo pack simulation + strategy comparison
 │   └── cloudflare.ts          # Puppeteer-stealth CF bypass + browser-based fetch
 ├── src/
 │   ├── main.tsx               # Entry point
-│   ├── App.tsx                # Root component + routing + init
+│   ├── App.tsx                # Root component + auth gate + routing
 │   ├── types.ts               # Shared TypeScript types
 │   ├── components/
 │   │   ├── Layout.tsx         # Shell with banners (error, sync, prefetch, toast)
 │   │   ├── Sidebar.tsx        # Navigation + completion bars
+│   │   ├── OnboardingPopup.tsx# Mandatory auth modal for first-time visitors
 │   │   ├── CardGrid.tsx       # Responsive card grid
 │   │   ├── CardTile.tsx       # Individual card with fallback/retry logic
 │   │   ├── CardHover.tsx      # Enlarged hover preview
@@ -340,16 +422,22 @@ hearthstone/
 │   │   ├── CalculatorView.tsx # Cost Calculator with strategy comparison
 │   │   ├── CraftAdvisorView.tsx
 │   │   ├── PackAdvisorView.tsx
+│   │   ├── DisenchantAdvisorView.tsx
+│   │   ├── HistoryView.tsx    # Collection history timeline
 │   │   └── SettingsView.tsx
 │   ├── stores/
 │   │   └── store.ts           # Zustand store (state, actions, enrichment, filtering)
+│   ├── hooks/
+│   │   └── useCollectionSnapshots.ts  # Server-side snapshot management
+│   ├── utils/
+│   │   ├── searchParser.ts    # Hearthstone keyword search parser
+│   │   └── localStorageMigration.ts   # Per-user localStorage key migration
 │   └── services/
-│       └── api.ts             # API client
+│       └── api.ts             # API client with token auth
 └── cli/                       # Original CLI calculator (preserved)
 ```
 
 ## Non-Goals
-- **No user accounts / multi-user support** — single user, local only
 - **No deck builder** — data layer supports future addition
 - **No mobile-optimized layouts** — desktop-first
-- **No real-time Hearthstone game integration** — collection sync is manual/auto trigger
+- **No real-time Hearthstone game integration** — collection sync is manual/server-scheduled

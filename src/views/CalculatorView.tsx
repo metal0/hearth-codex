@@ -146,8 +146,8 @@ export default function CalculatorView() {
                         <td className="px-4 py-3 text-right text-gray-300">{r.median}</td>
                         <td className="px-4 py-3 text-right text-gray-400">{r.min}-{r.max}</td>
                         <td className="px-4 py-3 text-right text-gray-400">{r.p25}-{r.p75}</td>
-                        <td className="px-4 py-3 text-right text-mana">{r.avgDustGenerated.toFixed(2)}</td>
-                        <td className="px-4 py-3 text-right text-orange-400">{r.avgDustSpentCrafting.toFixed(2)}</td>
+                        <td className="px-4 py-3 text-right text-mana">{Math.round(r.avgDustGenerated).toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right text-orange-400">{Math.round(r.avgDustSpentCrafting).toLocaleString()}</td>
                       </>
                     )}
                   </tr>
@@ -179,7 +179,7 @@ export default function CalculatorView() {
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-green-400">
-                    ${(totals.packs * 1.167).toFixed(2)}
+                    ${Math.round(totals.packs * 1.167).toLocaleString()}
                   </div>
                   <div className="text-xs text-gray-400 mt-1">USD (est)</div>
                 </div>
@@ -193,7 +193,7 @@ export default function CalculatorView() {
                   <div className="flex items-center justify-center gap-1.5">
                     <DustIcon size={20} />
                     <span className="text-2xl font-bold text-mana">
-                      {totals.dustGenerated.toFixed(2)}
+                      {Math.round(totals.dustGenerated).toLocaleString()}
                     </span>
                   </div>
                   <div className="text-xs text-gray-400 mt-1">dust earned</div>
@@ -202,7 +202,7 @@ export default function CalculatorView() {
                   <div className="flex items-center justify-center gap-1.5">
                     <DustIcon size={20} />
                     <span className="text-2xl font-bold text-orange-400">
-                      {totals.dustSpentCrafting.toFixed(2)}
+                      {Math.round(totals.dustSpentCrafting).toLocaleString()}
                     </span>
                   </div>
                   <div className="text-xs text-gray-400 mt-1">dust crafted</div>

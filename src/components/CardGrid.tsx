@@ -9,7 +9,7 @@ export default function CardGrid({ cards, onCardClick }: { cards: EnrichedCard[]
   }
 
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(235px,1fr))] gap-2">
       {cards.map(card => (
         <CardTile key={card.dbfId} card={card} onClick={onCardClick ? () => onCardClick(card) : undefined} />
       ))}

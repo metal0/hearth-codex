@@ -22,13 +22,13 @@ export default function CardHover({ id, name, className }: CardHoverProps) {
     })
   }, [])
 
-  const baseUrl = `/api/card-art/${id}/normal`
+  const baseUrl = `/art/${id}_normal.png`
   const imgUrl = collectionMode === 'golden'
-    ? `/api/card-art/${id}/golden`
+    ? `/art/${id}_golden.png`
     : collectionMode === 'signature'
-      ? `/api/card-art/${id}/signature`
+      ? `/art/${id}_signature.png`
       : collectionMode === 'diamond'
-        ? `/api/card-art/${id}/diamond`
+        ? `/art/${id}_diamond.png`
         : baseUrl
 
   return (
@@ -45,7 +45,7 @@ export default function CardHover({ id, name, className }: CardHoverProps) {
           style={{ left: pos.x, top: pos.y, transform: 'translateY(-25%)' }}
           alt={name}
           onError={e => {
-            if (!(e.target as HTMLImageElement).src.endsWith('/normal')) {
+            if (!(e.target as HTMLImageElement).src.endsWith('_normal.png')) {
               (e.target as HTMLImageElement).src = baseUrl
             }
           }}
