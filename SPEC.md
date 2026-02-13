@@ -45,9 +45,8 @@ A multi-user web application that tracks Hearthstone card collections with prope
 | `/api/meta` | GET | Card meta stats (standard + wild), auto-refreshes if >4h stale |
 | `/api/meta/refresh` | POST | Force refresh meta stats |
 | `/api/calculator` | POST | Run pack simulation with strategy comparison |
-| `/api/data-status` | GET | Card DB age, meta age, CF clearance status |
+| `/api/data-status` | GET | Card DB age, meta age, CF clearance status, art version |
 | `/api/prefetch-status` | GET | Background prefetch progress |
-| `/api/variant-availability` | GET | Lists cards confirmed missing signature/diamond variants |
 | `/api/card-art/cache-stats` | GET | Per-variant cache statistics (cached/missed counts) |
 | `/api/card-art/clear-cache` | POST | Clear all cached card art |
 | `/api/cf/solve` | POST | Trigger Cloudflare challenge solve |
@@ -84,9 +83,19 @@ Card art is served as static files at `/art/{cardId}_{variant}.png` via `express
 | `signature` | wiki.gg | `hearthstone.wiki.gg/images/{id}_Premium3.png` |
 
 ### Static Serving
-- `express.static(data/card-art-cache/)` at `/art/` with `Cache-Control: public, max-age=604800, immutable`
+- `express.static(data/card-art-cache/)` at `/art/` with `Cache-Control: public, max-age=31536000, immutable` (1 year)
 - Fallback route `/art/:filename` parses `{cardId}_{variant}.png`, fetches from upstream on cache miss
-- Frontend requests art at `/art/{cardId}_{variant}.png` (no API proxy overhead)
+- Frontend requests art at `/art/{cardId}_{variant}.png?v={artVersion}` (version param for cache busting)
+
+### Art Version Cache-Busting
+Server maintains an `artVersion` counter in `data/art-version.txt` (starts at 1). All client-side art URLs include `?v={artVersion}` as a query parameter.
+
+- **200 responses**: `Cache-Control: public, max-age=31536000, immutable` — cached permanently by browsers and CDNs
+- **404 (confirmed `.miss`)**: `Cache-Control: no-cache` — re-checked each time
+- **404 (fetch failed)**: `Cache-Control: no-store` — never cached
+- **Version bump triggers**: art cache clear (`/api/card-art/clear-cache`), card DB refresh with changes (`/api/cards/refresh`)
+- **Client propagation**: `artVersion` returned in `/api/data-status`, `/api/cards/refresh`, and `/api/card-art/clear-cache` responses; stored in Zustand state; threaded into all art URL construction (store enrichment, CardTile, CardHover, CardModal)
+- **Cloudflare CDN**: works out of the box when Caching Level is "Standard" (default) — query strings are part of the cache key
 
 ### Caching
 - All art cached in `data/card-art-cache/` as `{cardId}_{variant}.png`
@@ -95,19 +104,34 @@ Card art is served as static files at `/art/{cardId}_{variant}.png` via `express
 - Deduplication: concurrent requests for the same art share a single fetch promise
 
 ### Background Prefetcher
-Runs on server startup after card DB loads. Prefetches ALL cards in ALL 4 variants:
-- **Normal**: 10 concurrent workers, 50ms delay (HearthstoneJSON)
-- **Golden/Signature/Diamond**: 5 concurrent workers, 200ms delay (wiki.gg)
+Runs on server startup after card DB loads. Uses DB-driven `hasSignature`/`hasDiamond` flags to skip cards without variants. Prefetches in priority order:
+
+**Phase 1 — Owned cards** (prioritize what user actually has):
+1. `owned-normal` — HearthstoneJSON, 10 workers, 50ms
+2. `owned-diamond` — wiki.gg, hasDiamond + owned diamond
+3. `owned-signature` — wiki.gg, hasSignature + owned signature
+4. `owned-golden` — wiki.gg, all owned cards
+
+**Phase 2 — All normals:**
+5. `unowned-normal` — HearthstoneJSON, 10 workers, 50ms
+
+**Phase 3 — All premium (not golden):**
+6. `all-diamond` — wiki.gg, hasDiamond (skips cached)
+7. `all-signature` — wiki.gg, hasSignature (skips cached)
+
+**Phase 4 — Golden LAST:**
+8. `all-golden` — wiki.gg, all cards (skips cached)
+
 - Rate limit handling: 429 responses trigger pause using Retry-After header (default 30s)
 - Already-cached or already-missed files are skipped
 - Progress exposed via `/api/prefetch-status`, displayed in frontend PrefetchBanner
 
-### Variant Availability
-wiki.gg coverage is inconsistent for Premium2 (diamond) and Premium3 (signature). The system determines actual variant availability by checking for `.miss` files in the art cache:
-- `/api/variant-availability` scans for `*_signature.miss` and `*_diamond.miss` files
-- Frontend stores missing variant sets in `variantMissing` state
-- Cards with confirmed-missing variants are excluded from signature/diamond collection modes
-- Cards not yet checked (no cache hit or miss) are shown optimistically
+### Variant Availability (DB-Driven)
+Variant availability is determined by `hasSignature` and `hasDiamond` boolean fields in `CardDbEntry`, populated from HearthstoneJSON data:
+- `hasSignature`: derived from `HAS_SIGNATURE_QUALITY` tag (enumID 2589) in CardDefs.xml (~299 collectible cards)
+- `hasDiamond`: derived from `hasDiamondSkin` field in JSON API (~102 cards)
+- Cards without these flags are excluded from signature/diamond collection modes
+- Fields flow through `EnrichedCard` for UI consumption
 
 ### Background Retries
 When art fetch fails with non-404 status (rate limits, timeouts), background retries are scheduled with exponential backoff (up to 5 attempts). 429s respect the Retry-After header.
@@ -120,14 +144,17 @@ The app supports 4 collection tracking modes, toggled globally via `CollectionMo
 |------|----------------------|-------------|---------------|
 | **Normal** | normal + golden + diamond + signature | Best owned variant (diamond > sig > golden > normal) | All cards |
 | **Golden** | golden + diamond + signature | Golden variant | All cards |
-| **Signature** | signature + diamond (only if variant exists) | Signature variant | Cards from yearNum >= 2022 with confirmed sig art |
-| **Diamond** | diamond only (only if variant exists) | Diamond variant | Legendaries with confirmed diamond art |
+| **Signature** | signature + diamond (only if `hasSignature` or owned) | Signature variant | Cards with `hasSignature` flag or existing signature count |
+| **Diamond** | diamond only (only if `hasDiamond` or owned) | Diamond variant | Cards with `hasDiamond` flag or existing diamond count |
 
 Cards without a variant in the selected mode show the normal art (greyed out if unowned). In signature/diamond modes, cards without the variant are auto-marked as "complete" to avoid polluting the collection view.
 
+### Obtainability Filter
+In signature and diamond modes, an additional filter appears: **All / Obtainable / Unobtainable**. This filters cards based on their acquisition method's `obtainable` flag from the variant acquisition system (see below). Resets to "All" when switching to normal or golden mode.
+
 ## Views & Navigation
 
-Persistent **sidebar** navigation with 8 views. Sidebar shows per-expansion completion bars (dust-weighted) with per-rarity breakdown tooltips.
+Persistent **sidebar** navigation with 8 views. Sidebar shows Standard + Wild completion bars with per-rarity breakdown tooltips. Four bar modes cycle on click: **Normal** (dust-weighted), **Golden** (golden craft cost weighted), **Signature** (copy counts), **Meta** (weighted by `craftCost × max(played%, 0.1% baseline)` using meta stats — prioritizes meta-relevant cards over unplayed ones).
 
 ### 1. Collection View (default `/`)
 
@@ -136,6 +163,8 @@ Card grid showing every collectible card with ownership overlay.
 **Card Tiles:**
 - Card renders from server art proxy
 - Unowned cards displayed greyscale/dimmed
+- Partial ownership badge (yellow): shows `X/Y` count (e.g. "1/2")
+- Excess copies badge (green): shows total count when more than max copies owned (e.g. "5")
 - Default grouping by rarity (Legendary > Epic > Rare > Common), then mana cost, then name
 - Client-side 1.5s timeout with fallback to normal art and background probe retries at 10s, 30s
 
@@ -146,8 +175,9 @@ Card grid showing every collectible card with ownership overlay.
 | Class | Class picker with WoW-style icons | 11 classes + Neutral |
 | Rarity | Toggle chips with gem icons | Common, Rare, Epic, Legendary |
 | Ownership | Toggle chips | All, Owned, Incomplete |
+| Obtainability | Toggle chips (sig/diamond modes only) | All, Obtainable, Unobtainable |
 | Format | Toggle with HS icons | Standard / Wild |
-| Text Search | Input | Searches card name + text |
+| Text Search | Input with clear button | Searches card name + text (X button appears when text entered) |
 | Sort | Dropdown | Name, Cost, Rarity, Set, Inclusion Rate, Winrate |
 
 **Card Interactions:**
@@ -310,16 +340,20 @@ data/users/{account_lo}/
 ### CardDbEntry
 ```typescript
 interface CardDbEntry {
-  id: string;        // e.g. "CS2_029"
-  set: string;       // e.g. "TIME_TRAVEL"
+  id: string;          // e.g. "CS2_029"
+  set: string;         // e.g. "TIME_TRAVEL"
   rarity: 'COMMON' | 'RARE' | 'EPIC' | 'LEGENDARY';
   name: string;
-  type: string;      // MINION, SPELL, WEAPON, HERO, LOCATION
-  cardClass: string; // e.g. "MAGE"
+  type: string;        // MINION, SPELL, WEAPON, HERO, LOCATION
+  cardClass: string;   // e.g. "MAGE"
   cost: number;
   attack?: number;
   health?: number;
   text?: string;
+  freeNormal: boolean;   // true if normal version is free (from howToEarn)
+  freeGolden: boolean;   // true if golden version is free (from howToEarnGolden)
+  hasSignature: boolean; // true if card has a signature variant (from HAS_SIGNATURE_QUALITY)
+  hasDiamond: boolean;   // true if card has a diamond variant (from hasDiamondSkin)
 }
 ```
 
@@ -343,10 +377,14 @@ interface EnrichedCard extends CardDbEntry {
   signatureCount: number;
   totalOwned: number;    // mode-aware ownership count
   maxCopies: number;     // 1 for legendary, 2 otherwise
-  imageUrl: string;      // /art/{id}_{variant}.png
+  imageUrl: string;      // /art/{id}_{variant}.png?v={artVersion}
   inclusionRate: number;
   winrate: number;
   decks: number;
+  freeNormal: boolean;
+  freeGolden: boolean;
+  hasSignature: boolean;
+  hasDiamond: boolean;
 }
 ```
 
@@ -387,6 +425,7 @@ hearthstone/
 ├── data/                      # Persistent storage (git-ignored)
 │   ├── card-db.json           # HearthstoneJSON card database (shared)
 │   ├── meta-stats.json        # Standard + Wild meta stats (shared)
+│   ├── art-version.txt        # Art cache-busting version counter
 │   ├── card-art-cache/        # Cached card art (shared, png + miss files)
 │   └── users/                 # Per-user data directories
 │       └── {account_lo}/
@@ -428,7 +467,8 @@ hearthstone/
 │   ├── stores/
 │   │   └── store.ts           # Zustand store (state, actions, enrichment, filtering)
 │   ├── hooks/
-│   │   └── useCollectionSnapshots.ts  # Server-side snapshot management
+│   │   ├── useCollectionSnapshots.ts  # Server-side snapshot management
+│   │   └── useRotationInfo.ts         # Shared rotation date/sets hook
 │   ├── utils/
 │   │   ├── searchParser.ts    # Hearthstone keyword search parser
 │   │   └── localStorageMigration.ts   # Per-user localStorage key migration
@@ -436,6 +476,100 @@ hearthstone/
 │       └── api.ts             # API client with token auth
 └── cli/                       # Original CLI calculator (preserved)
 ```
+
+## Variant Acquisition System
+
+Hardcoded maps in `src/types.ts` track how each diamond and signature card is obtained. This enables rich tooltips in CardModal, obtainability filtering, and achievement progress tracking.
+
+### Diamond Acquisition
+
+`DIAMOND_ACQUISITION: Record<string, DiamondAcquisitionInfo>` maps ~86 diamond card IDs to:
+
+```typescript
+interface DiamondAcquisitionInfo {
+  method: 'achievement' | 'miniset' | 'tavern-pass' | 'preorder' | 'shop' | 'darkmoon' | 'event' | 'unknown';
+  description: string;        // Human-readable source (e.g. "Whizbang's Workshop Tavern Pass")
+  obtainable: boolean;        // Can still be obtained today?
+  achievementSet?: string;    // For 'achievement': set code whose legendaries must be collected
+}
+```
+
+| Method | Count | Obtainable | Example |
+|--------|-------|------------|---------|
+| `achievement` | 10 | Yes | Collect all legendaries from a set (e.g. EX1_298 Ragnaros → EXPERT1) |
+| `miniset` | 10 | Last 6 yes, older 4 no | Golden miniset purchase reward (e.g. FIR_959 Fyrakk) |
+| `tavern-pass` | 15 | No | Expansion Tavern Pass reward (time-limited) |
+| `preorder` | 1 | No | Pre-order bundle exclusive |
+| `shop` | ~37 | No | Shop-only promotional diamonds |
+| `darkmoon` | 7 | Yes | Darkmoon Faire prize rotation |
+| `event` | 2 | No | Limited-time event rewards (e.g. Alterac Valley Honor) |
+
+Cards with `method === 'achievement'` show a progress bar in CardModal tracking how many legendaries the user owns from the target set.
+
+### Signature Acquisition
+
+`SIGNATURE_ACQUISITION: Record<string, SignatureAcquisitionInfo>` maps ~62 explicitly-tracked signature card IDs, with fallback logic for the remaining ~237 pack-obtainable legendaries.
+
+```typescript
+interface SignatureAcquisitionInfo {
+  method: 'pack' | 'shop' | 'achievement' | 'tavern-pass' | 'event' | 'darkmoon' | 'unknown';
+  description: string;
+  obtainable: boolean;
+  achievementSet?: string;
+}
+```
+
+**Lookup logic** (`getSignatureAcquisition(cardId, setCode, rarity)`):
+1. Check `SIGNATURE_ACQUISITION` map for explicit entry → return it
+2. If card is in a `REVIEWED_SIGNATURE_SETS` set and is LEGENDARY → `pack` (obtainable from golden packs)
+3. If card is in a reviewed set but not LEGENDARY → `event` (Tavern Pass/promotion only, unobtainable)
+4. Otherwise → `unknown` (unreviewed set, assumed obtainable)
+
+**Pack-obtainable signatures**: Only LEGENDARY cards from golden packs. 5% per expansion golden pack (40 pity), 0.6% per standard/wild golden pack (361 pity). Non-legendary signatures are never from packs.
+
+**Achievement signatures** (from Whizbang's Workshop onward): 2 per expansion, earned by collecting all legendaries from that expansion. Show progress bars identical to diamond achievements.
+
+### CardModal Tooltips
+
+The CardModal shows enriched acquisition info for diamond and signature variants:
+- **Achievement**: Progress bar with X/Y legendaries owned, percentage, colored bar (gold for sig, cyan for diamond)
+- **Pack**: Pull chance calculation (existing signature pull chance display)
+- **Shop/Tavern Pass/Preorder/Event**: Description + "No longer available" in red
+- **Darkmoon**: Description noting Darkmoon Faire prize status
+- **Unknown**: "Acquisition method unknown"
+
+### Pack Advisor Integration
+
+Signature mode in Pack Advisor uses `getSignatureAcquisition` to identify pack-obtainable legendaries for scoring. Only `method === 'pack'` signatures contribute to pack value calculations. Craft cost column is hidden in signature mode (signatures cannot be crafted).
+
+## Maintaining Variant Acquisition Data
+
+When new Hearthstone content releases (expansions, minisets, Tavern Pass, shop bundles), the acquisition maps in `src/types.ts` need manual updates.
+
+### Adding New Diamond Cards
+
+1. Find the card's `id` (e.g. "NEW_123") in the card database
+2. Determine acquisition method from patch notes, shop announcements, or in-game
+3. Add entry to `DIAMOND_ACQUISITION` in `src/types.ts`:
+   ```typescript
+   NEW_123: { method: 'achievement', description: 'Collect all New Expansion legendaries', obtainable: true, achievementSet: 'NEW_EXPANSION' },
+   ```
+4. For achievement diamonds: ensure the `achievementSet` matches the expansion code in the card DB
+
+### Adding New Signature Cards
+
+1. For **achievement** signatures (2 per expansion from Whizbang's Workshop onward): find card IDs and add to `SIGNATURE_ACQUISITION`
+2. For **tavern pass** signatures: add with `method: 'tavern-pass'`, `obtainable: false`
+3. For **shop-only** signatures: add with `method: 'shop'`, `obtainable: false`
+4. Add the new expansion's set code to `REVIEWED_SIGNATURE_SETS` once all non-pack signatures are catalogued
+
+### Updating Miniset Obtainability
+
+When a new miniset releases, the oldest obtainable miniset may need to be marked `obtainable: false`. Currently, the last 6 minisets are considered obtainable.
+
+### Updating Darkmoon Faire Rotation
+
+Darkmoon Faire prizes rotate. When new rotation is announced, update existing entries and add new diamond card IDs with `method: 'darkmoon'`.
 
 ## Non-Goals
 - **No deck builder** — data layer supports future addition

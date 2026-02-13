@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import type { EnrichedCard } from '../types.ts'
 import { RARITY_COLORS, DUST_COST } from '../types.ts'
+import { useStore } from '../stores/store.ts'
 
 export default function CardTile({ card, onClick }: { card: EnrichedCard; onClick?: () => void }) {
+  const av = useStore(s => s.artVersion)
   const [imgSrc, setImgSrc] = useState(card.imageUrl)
   const [textFallback, setTextFallback] = useState(false)
   const loadedRef = useRef(false)
@@ -10,8 +12,8 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
   const isComplete = card.totalOwned >= card.maxCopies
   const isPartial = card.totalOwned > 0 && !isComplete
   const isUnowned = card.totalOwned === 0
-  const fallbackUrl = `/art/${card.id}_normal.png`
-  const isVariant = card.imageUrl !== fallbackUrl
+  const fallbackUrl = `/art/${card.id}_normal.png?v=${av}`
+  const isVariant = !card.imageUrl.includes('_normal.png')
 
   useEffect(() => {
     loadedRef.current = false
@@ -93,6 +95,14 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
           style={{ backgroundColor: '#eab308', color: '#000' }}
         >
           {card.totalOwned}/{card.maxCopies}
+        </div>
+      )}
+      {isComplete && card.totalOwned > card.maxCopies && (
+        <div
+          className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[10px] font-bold shadow-lg"
+          style={{ backgroundColor: '#22c55e', color: '#000' }}
+        >
+          {card.totalOwned}
         </div>
       )}
 

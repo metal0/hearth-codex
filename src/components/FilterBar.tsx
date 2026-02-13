@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../stores/store.ts'
-import type { OwnershipFilter, FormatFilter, SortOption } from '../types.ts'
+import type { OwnershipFilter, ObtainabilityFilter, FormatFilter, SortOption } from '../types.ts'
 import CollectionModeToggle from './CollectionModeToggle.tsx'
 import ClassPicker from './ClassPicker.tsx'
 import RarityFilter from './RarityFilter.tsx'
@@ -10,6 +10,12 @@ const OWNERSHIP_OPTIONS: { value: OwnershipFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'owned', label: 'Owned' },
   { value: 'incomplete', label: 'Incomplete' },
+]
+
+const OBTAINABILITY_OPTIONS: { value: ObtainabilityFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'obtainable', label: 'Obtainable' },
+  { value: 'unobtainable', label: 'Unobtainable' },
 ]
 
 const FORMAT_OPTIONS: { value: FormatFilter; label: string }[] = [
@@ -83,10 +89,10 @@ export function Dropdown({ label, options, value, onChange }: {
 export default function FilterBar() {
   const {
     selectedSets, selectedClasses, selectedRarities,
-    ownershipFilter, formatFilter, searchText, sortBy, sortAsc,
-    expansions,
+    ownershipFilter, obtainabilityFilter, formatFilter, searchText, sortBy, sortAsc,
+    expansions, collectionMode,
     setSelectedSets, setSelectedClasses, setSelectedRarities,
-    setOwnershipFilter, setFormatFilter, setSearchText, setSortBy, toggleSortDirection,
+    setOwnershipFilter, setObtainabilityFilter, setFormatFilter, setSearchText, setSortBy, toggleSortDirection,
   } = useStore()
 
   const setOptions = [
@@ -99,14 +105,27 @@ export default function FilterBar() {
 
   return (
     <div className="sticky top-0 z-10 bg-navy/95 backdrop-blur-sm border-b border-white/10 px-4 py-3 flex flex-wrap gap-2 items-center">
-      <input
-        type="text"
-        placeholder="Search..."
-        value={searchText}
-        onChange={e => setSearchText(e.target.value)}
-        className="bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm w-48
-                   placeholder:text-gray-500 focus:outline-none focus:border-gold/50"
-      />
+      <div className="relative w-48">
+        <input
+          type="text"
+          placeholder="Search..."
+          value={searchText}
+          onChange={e => setSearchText(e.target.value)}
+          className="bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm w-full pr-7
+                     placeholder:text-gray-500 focus:outline-none focus:border-gold/50"
+        />
+        {searchText && (
+          <button
+            onClick={() => setSearchText('')}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-gray-500 hover:text-gray-300 transition-colors"
+          >
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
+      </div>
 
       <div className="flex rounded overflow-hidden border border-white/10">
         {FORMAT_OPTIONS.map(opt => (
@@ -144,6 +163,24 @@ export default function FilterBar() {
           </button>
         ))}
       </div>
+
+      {(collectionMode === 'signature' || collectionMode === 'diamond') && (
+        <div className="flex rounded overflow-hidden border border-white/10">
+          {OBTAINABILITY_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setObtainabilityFilter(opt.value)}
+              className={`px-2.5 py-1.5 text-xs transition-colors ${
+                obtainabilityFilter === opt.value
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : 'bg-white/5 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <Dropdown
         label="Set"

@@ -13,7 +13,7 @@ Track your Hearthstone collection, calculate pack costs, and optimize your craft
 - **Disenchant Advisor** — Identifies safe-to-dust extras accounting for free/uncraftable cards, with dust value breakdown by rarity.
 - **Collection History** — Track collection progress over time with snapshot diffs and charts.
 - **HSReplay Sync** — Import your collection from HSReplay.net via session cookie. Server-side proxy handles Cloudflare protection.
-- **Card Art Proxy** — Server caches card art from HearthstoneJSON and wiki.gg with background prefetching and retry logic.
+- **Card Art Proxy** — Server caches card art from HearthstoneJSON and wiki.gg with background prefetching and retry logic. Initial cache build scrapes ~20,000 images across 4 variants (normal, golden, signature, diamond) and can take several hours to days depending on rate limits from upstream sources. Progress is shown in the sidebar during prefetching. Once cached, art is served as static files with CDN-ready headers.
 
 ## Deploy
 

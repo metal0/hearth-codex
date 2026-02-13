@@ -150,13 +150,14 @@ export default function CollectionView() {
   const sortBy = useStore(s => s.sortBy)
   const sortAsc = useStore(s => s.sortAsc)
   const collectionMode = useStore(s => s.collectionMode)
-  const variantConfirmed = useStore(s => s.variantConfirmed)
+
+  const obtainabilityFilter = useStore(s => s.obtainabilityFilter)
 
   const filteredCards = useMemo(() => getFilteredCards(), [
     getFilteredCards, cards, collection, metaStandard, metaWild, expansions,
     selectedSets, selectedClasses, selectedRarities,
-    ownershipFilter, formatFilter, searchText, sortBy, sortAsc,
-    collectionMode, variantConfirmed,
+    ownershipFilter, obtainabilityFilter, formatFilter, searchText, sortBy, sortAsc,
+    collectionMode,
   ])
 
   const groups = useMemo(
@@ -202,20 +203,28 @@ export default function CollectionView() {
                 ({stats.totalCards > 0 ? (stats.ownedCards / stats.totalCards * 100).toFixed(2) : '0.00'}%)
               </span>
             </span>
-            <span className="flex items-center gap-1">
-              <DustIcon size={12} />
-              Missing: <span className="text-mana font-medium">{stats.missingDust.toLocaleString()}</span>
-            </span>
+            {collectionMode !== 'signature' && collectionMode !== 'diamond' && (
+              <span className="flex items-center gap-1">
+                <DustIcon size={12} />
+                Missing: <span className="text-mana font-medium">{stats.missingDust.toLocaleString()}</span>
+              </span>
+            )}
           </>
         )}
         <button
           onClick={() => setShowHeatmap(h => !h)}
-          className={`ml-auto px-2 py-0.5 rounded text-[10px] border ${
+          className={`ml-auto flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium border transition-colors ${
             showHeatmap
               ? 'bg-gold/15 text-gold border-gold/30'
-              : 'bg-white/5 text-gray-500 border-white/10 hover:bg-white/10'
+              : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10 hover:text-gray-300'
           }`}
         >
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" className="opacity-70">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+          </svg>
           Heatmap
         </button>
       </div>

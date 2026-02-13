@@ -39,7 +39,6 @@ export default function DisenchantAdvisorView() {
   const metaStandard = useStore(s => s.metaStandard)
   const metaWild = useStore(s => s.metaWild)
   const collectionMode = useStore(s => s.collectionMode)
-  const variantConfirmed = useStore(s => s.variantConfirmed)
 
   const [selectedRarities, setSelectedRarities] = useState<Rarity[]>([])
   const [selectedClass, setSelectedClass] = useState('')
@@ -224,7 +223,7 @@ export default function DisenchantAdvisorView() {
     }
 
     return { candidates: results, excludedNoStats: excluded, excludedNoWinrate: excludedWr }
-  }, [getEnrichedCards, collection, expansions, metaStandard, metaWild, playedThreshold, goldenKeepThreshold, hideNoWinrate, collectionMode, variantConfirmed])
+  }, [getEnrichedCards, collection, expansions, metaStandard, metaWild, playedThreshold, goldenKeepThreshold, hideNoWinrate, collectionMode])
 
   const filtered = useMemo(() => {
     let items = candidates.filter(c => c.safety >= minSafety)

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { EnrichedCard, Rarity } from '../types.ts'
-import { RARITY_COLORS, DUST_COST } from '../types.ts'
+import { RARITY_COLORS, DUST_COST, getSignatureAcquisition, getDiamondAcquisition } from '../types.ts'
+import type { DiamondAcquisitionInfo, SignatureAcquisitionInfo } from '../types.ts'
 import { useStore } from '../stores/store.ts'
 
 const PACK_WEIGHT: Record<Rarity, number> = {
@@ -10,7 +11,8 @@ const PACK_WEIGHT: Record<Rarity, number> = {
   LEGENDARY: 0.0100,
 }
 
-const GOLDEN_PACK_SIG_WEIGHT = 0.01
+const SIG_PER_PACK_EXPANSION_GOLDEN = 0.05
+const SIG_PITY_EXPANSION_GOLDEN = 40
 
 const PITY_CAP: Record<Rarity, number> = {
   COMMON: 0,
@@ -25,9 +27,9 @@ interface PackProbability {
   packs: number
 }
 
-function computePullChance(rarity: Rarity, missingOfRarity: number, weight?: number): number {
+function computePullChance(rarity: Rarity, missingOfRarity: number): number {
   if (missingOfRarity === 0) return 0
-  const pPerSlot = (weight ?? PACK_WEIGHT[rarity]) / missingOfRarity
+  const pPerSlot = PACK_WEIGHT[rarity] / missingOfRarity
   return 1 - Math.pow(1 - pPerSlot, 5)
 }
 
@@ -47,14 +49,19 @@ function expectedPacksToHitRarity(perPackChance: number, pityCap: number): numbe
   return expected
 }
 
-function expectedPacksForCard(rarity: Rarity, missingOfRarity: number, weight?: number): number {
+function expectedPacksForCard(rarity: Rarity, missingOfRarity: number): number {
   if (missingOfRarity <= 0) return 0
 
-  const w = weight ?? PACK_WEIGHT[rarity]
-  const perPackChance = 1 - Math.pow(1 - w, 5)
+  const perPackChance = 1 - Math.pow(1 - PACK_WEIGHT[rarity], 5)
   const packsPerHit = expectedPacksToHitRarity(perPackChance, PITY_CAP[rarity])
 
   return Math.ceil(packsPerHit * (missingOfRarity + 1) / 2)
+}
+
+function expectedPacksForSig(missingInSet: number, perPackRate: number, pity: number): number {
+  if (missingInSet <= 0) return 0
+  const packsPerHit = expectedPacksToHitRarity(perPackRate, pity)
+  return Math.ceil(packsPerHit * (missingInSet + 1) / 2)
 }
 
 function PullChanceBar({ label, chance, packs }: PackProbability) {
@@ -126,12 +133,12 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
   }, [onClose])
 
   const expansion = expansions.find(e => e.code === card.set)
-  const variantConfirmed = useStore(s => s.variantConfirmed)
   const isStandard = expansion?.standard ?? false
   const isComplete = card.totalOwned >= card.maxCopies
-  const hasSignature = variantConfirmed.signature.has(card.id)
-  const hasDiamond = variantConfirmed.diamond.has(card.id)
+  const hasSignature = card.hasSignature ?? false
+  const hasDiamond = card.hasDiamond ?? false
   const isLegendary = card.rarity === 'LEGENDARY'
+  const sigEligible = (expansion?.yearNum ?? 0) >= 2022
 
   type ArtVariant = 'normal' | 'golden' | 'signature' | 'diamond'
   const artVariants: { key: ArtVariant; label: string; color: string }[] = [
@@ -145,10 +152,11 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
     : card.signatureCount > 0 && hasSignature ? 'signature'
     : card.goldenCount > 0 ? 'golden' : 'normal'
   const [artVariant, setArtVariant] = useState<ArtVariant>(defaultVariant)
+  const av = useStore(s => s.artVersion)
 
   const artUrl = artVariant === 'normal'
-    ? `/art/${card.id}_normal-lg.png`
-    : `/art/${card.id}_${artVariant}.png`
+    ? `/art/${card.id}_normal-lg.png?v=${av}`
+    : `/art/${card.id}_${artVariant}.png?v=${av}`
 
   const normalChances = useMemo((): PackProbability[] => {
     if (card.normalCount >= card.maxCopies) return []
@@ -199,25 +207,40 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
     return []
   }, [card, getEnrichedCards, expansion])
 
+  const sigAcq: SignatureAcquisitionInfo | null = (hasSignature || card.signatureCount > 0)
+    ? getSignatureAcquisition(card.id, card.set, card.rarity)
+    : null
+
+  const diamondAcq: DiamondAcquisitionInfo | null = (hasDiamond || card.diamondCount > 0)
+    ? getDiamondAcquisition(card.id)
+    : null
+
   const signatureChances = useMemo((): PackProbability[] => {
-    if (!hasSignature || !isLegendary || card.signatureCount > 0) return []
+    if (sigAcq?.method !== 'pack' || card.signatureCount > 0) return []
 
     const all = getEnrichedCards()
-    let missingSignatureInSet = 0
+    let packLegsInSet = 0
+    let ownedSigsInSet = 0
 
     for (const c of all) {
       if (c.set !== card.set || c.rarity !== 'LEGENDARY') continue
-      if (c.signatureCount === 0) missingSignatureInSet++
+      if (getSignatureAcquisition(c.id, c.set, c.rarity).method !== 'pack') continue
+      packLegsInSet++
+      if (c.signatureCount > 0) ownedSigsInSet++
     }
 
-    if (missingSignatureInSet === 0) return []
+    const missingInPool = packLegsInSet - ownedSigsInSet
+    if (missingInPool <= 0) return []
 
-    const chance = computePullChance('LEGENDARY', missingSignatureInSet, GOLDEN_PACK_SIG_WEIGHT)
-    if (chance > 0) {
-      return [{ label: `${expansion?.name ?? card.set} Golden Pack`, chance, packs: expectedPacksForCard('LEGENDARY', missingSignatureInSet, GOLDEN_PACK_SIG_WEIGHT) }]
-    }
-    return []
-  }, [card, hasSignature, isLegendary, getEnrichedCards, expansion])
+    const expChance = SIG_PER_PACK_EXPANSION_GOLDEN / missingInPool
+    const expPacks = expectedPacksForSig(missingInPool, SIG_PER_PACK_EXPANSION_GOLDEN, SIG_PITY_EXPANSION_GOLDEN)
+
+    return [{
+      label: `${expansion?.name ?? card.set} Golden Pack`,
+      chance: expChance,
+      packs: expPacks,
+    }]
+  }, [card, sigAcq, getEnrichedCards, expansion])
 
   const normalTooltip = normalChances.length > 0 ? (
     <div className="space-y-1.5">
@@ -233,21 +256,102 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
     </div>
   ) : undefined
 
-  const signatureTooltip = hasSignature && isLegendary ? (
-    signatureChances.length > 0 ? (
-      <div className="space-y-1.5">
-        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Signature pull chance per golden pack</div>
-        {signatureChances.map(p => <PullChanceBar key={p.label} {...p} />)}
-      </div>
-    ) : undefined
-  ) : undefined
+  const sigAchievementProgress = useMemo(() => {
+    if (!sigAcq || sigAcq.method !== 'achievement' || !sigAcq.achievementSet) return null
+    const all = getEnrichedCards()
+    const setLegs = all.filter(c => c.set === sigAcq.achievementSet && c.rarity === 'LEGENDARY')
+    const owned = setLegs.filter(c => c.normalCount + c.goldenCount + c.diamondCount + c.signatureCount > 0).length
+    return { owned, total: setLegs.length }
+  }, [sigAcq, getEnrichedCards])
 
-  const diamondTooltip = isLegendary && card.diamondCount === 0 ? (
-    <div className="text-xs text-gray-400">
-      <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">How to obtain</div>
-      <p>Diamond cards are obtained through special promotions, achievements, or pre-order bundles. They cannot be crafted or found in packs.</p>
-    </div>
-  ) : undefined
+  const diamondAchievementProgress = useMemo(() => {
+    if (!diamondAcq || diamondAcq.method !== 'achievement' || !diamondAcq.achievementSet) return null
+    const all = getEnrichedCards()
+    const setLegs = all.filter(c => c.set === diamondAcq.achievementSet && c.rarity === 'LEGENDARY')
+    const owned = setLegs.filter(c => c.normalCount + c.goldenCount + c.diamondCount + c.signatureCount > 0).length
+    return { owned, total: setLegs.length }
+  }, [diamondAcq, getEnrichedCards])
+
+  const signatureTooltip = sigAcq ? (() => {
+    if (sigAcq.method === 'pack') {
+      if (signatureChances.length > 0) return (
+        <div className="space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Signature pull chance per golden pack</div>
+          <div className="text-[10px] text-gray-500 mb-1">5% per expansion golden pack for any signature in this set</div>
+          {signatureChances.map(p => <PullChanceBar key={p.label} {...p} />)}
+        </div>
+      )
+      if (card.signatureCount > 0) return undefined
+      return (
+        <div className="text-xs text-gray-400">
+          <p>Obtainable from expansion golden packs (5% per pack, 40 pity).</p>
+        </div>
+      )
+    }
+    if (sigAcq.method === 'achievement' && sigAchievementProgress) {
+      const { owned, total } = sigAchievementProgress
+      const pct = total > 0 ? (owned / total * 100) : 0
+      return (
+        <div className="text-xs text-gray-400 space-y-2">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">Achievement reward</div>
+          <p>{sigAcq.description}</p>
+          <div>
+            <div className="flex justify-between text-[10px] mb-1">
+              <span>{owned} / {total} legendaries</span>
+              <span className={pct >= 100 ? 'text-green-400' : 'text-gold'}>{pct.toFixed(0)}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div className="h-full bg-gold rounded-full transition-all" style={{ width: `${Math.min(pct, 100)}%` }} />
+            </div>
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="text-xs text-gray-400">
+        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">How to obtain</div>
+        <p>{sigAcq.description}</p>
+        {!sigAcq.obtainable && <p className="text-red-400/70 mt-1">No longer available</p>}
+      </div>
+    )
+  })() : undefined
+
+  const diamondTooltip = (hasDiamond || card.diamondCount > 0) && card.diamondCount === 0 ? (() => {
+    if (diamondAcq?.method === 'achievement' && diamondAchievementProgress) {
+      const { owned, total } = diamondAchievementProgress
+      const pct = total > 0 ? (owned / total * 100) : 0
+      return (
+        <div className="text-xs text-gray-400 space-y-2">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">Achievement reward</div>
+          <p>{diamondAcq.description}</p>
+          <div>
+            <div className="flex justify-between text-[10px] mb-1">
+              <span>{owned} / {total} legendaries</span>
+              <span className={pct >= 100 ? 'text-green-400' : 'text-gold'}>{pct.toFixed(0)}%</span>
+            </div>
+            <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div className="h-full bg-cyan-400 rounded-full transition-all" style={{ width: `${Math.min(pct, 100)}%` }} />
+            </div>
+          </div>
+        </div>
+      )
+    }
+    if (diamondAcq) {
+      return (
+        <div className="text-xs text-gray-400">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">How to obtain</div>
+          <p>{diamondAcq.description}</p>
+          {!diamondAcq.obtainable && <p className="text-red-400/70 mt-1">No longer available</p>}
+        </div>
+      )
+    }
+    return (
+      <div className="text-xs text-gray-400">
+        <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">How to obtain</div>
+        <p>Acquisition method unknown</p>
+      </div>
+    )
+  })() : undefined
 
   const ownershipStatus = isComplete ? 'Complete' : card.totalOwned > 0 ? 'Incomplete' : 'Missing'
   const statusColor = isComplete ? 'text-green-400' : card.totalOwned > 0 ? 'text-yellow-400' : 'text-red-400'

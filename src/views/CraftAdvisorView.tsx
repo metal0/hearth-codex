@@ -7,6 +7,7 @@ import CardHover from '../components/CardHover.tsx'
 import CollectionModeToggle from '../components/CollectionModeToggle.tsx'
 import ClassPicker, { ClassIcon, classLabel } from '../components/ClassPicker.tsx'
 import RarityFilter from '../components/RarityFilter.tsx'
+import { useRotationInfo } from '../hooks/useRotationInfo.ts'
 
 export default function CraftAdvisorView() {
   const getEnrichedCards = useStore(s => s.getEnrichedCards)
@@ -14,15 +15,14 @@ export default function CraftAdvisorView() {
   const expansions = useStore(s => s.expansions)
   const cardsLoading = useStore(s => s.cardsLoading)
   const collectionMode = useStore(s => s.collectionMode)
-  const storeSetFormatFilter = useStore(s => s.setFormatFilter)
-  const variantConfirmed = useStore(s => s.variantConfirmed)
   const craftQueue = useStore(s => s.craftQueue)
   const addToQueue = useStore(s => s.addToQueue)
   const removeFromQueue = useStore(s => s.removeFromQueue)
   const clearQueue = useStore(s => s.clearQueue)
 
-  const [formatFilter, setFormatFilterLocal] = useState<'standard' | 'wild'>('standard')
-  const setFormatFilter = (f: 'standard' | 'wild') => { setFormatFilterLocal(f); storeSetFormatFilter(f) }
+  const rotationInfo = useRotationInfo(expansions, 90)
+
+  const [formatFilter, setFormatFilter] = useState<'standard' | 'wild'>('standard')
   const [selectedSet, setSelectedSet] = useState('')
   const [selectedRarities, setSelectedRarities] = useState<Rarity[]>([])
   const [selectedClass, setSelectedClass] = useState('')
@@ -94,7 +94,7 @@ export default function CraftAdvisorView() {
     })
 
     return cards
-  }, [getEnrichedCards, expansions, formatFilter, selectedSet, selectedRarities, selectedClass, onlyAffordable, dust, sortCol, sortAsc, collectionMode, variantConfirmed])
+  }, [getEnrichedCards, expansions, formatFilter, selectedSet, selectedRarities, selectedClass, onlyAffordable, dust, sortCol, sortAsc, collectionMode])
 
   const craftPlan = useMemo(() => {
     if (!onlyAffordable) return null
@@ -121,7 +121,7 @@ export default function CraftAdvisorView() {
     return craftQueue
       .map(id => byId.get(id))
       .filter((c): c is EnrichedCard => c != null && c.totalOwned < c.maxCopies)
-  }, [craftQueue, getEnrichedCards, collectionMode, variantConfirmed])
+  }, [craftQueue, getEnrichedCards, collectionMode])
 
   const queueDust = useMemo(() => {
     let total = 0
@@ -365,13 +365,28 @@ export default function CraftAdvisorView() {
           <tbody>
             {missingCards.slice(0, 200).map(card => {
               const queued = queueSet.has(card.dbfId)
+              const rotating = formatFilter === 'standard' && rotationInfo?.rotatingCodes.has(card.set)
               return (
                 <tr key={card.dbfId} className="border-b border-white/5 hover:bg-white/5">
                   <td className="px-4 py-2">
                     <RarityGem size={14} rarity={card.rarity} />
                   </td>
                   <td className="px-4 py-2 text-white">
-                    <CardHover id={card.id} name={card.name} className="text-white" />
+                    <span className="flex items-center gap-1.5">
+                      <CardHover id={card.id} name={card.name} className="text-white" />
+                      {rotating && (
+                        <span
+                          className="shrink-0 text-orange-400 cursor-help"
+                          title={`Rotating out ~${rotationInfo!.monthStr} (${rotationInfo!.daysLeft}d)`}
+                        >
+                          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                          </svg>
+                        </span>
+                      )}
+                    </span>
                   </td>
                   <td className="px-4 py-2" style={{ color: RARITY_COLORS[card.rarity] }}>
                     {card.rarity[0] + card.rarity.slice(1).toLowerCase()}

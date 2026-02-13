@@ -25,6 +25,15 @@ initAuth(DATA_DIR);
 const CARD_ART_CACHE = join(DATA_DIR, 'card-art-cache');
 mkdirSync(CARD_ART_CACHE, { recursive: true });
 
+const ART_VERSION_PATH = join(DATA_DIR, 'art-version.txt');
+let artVersion = 1;
+try { artVersion = parseInt(readFileSync(ART_VERSION_PATH, 'utf-8').trim(), 10) || 1; } catch {}
+function bumpArtVersion(): number {
+  artVersion++;
+  writeFileSync(ART_VERSION_PATH, String(artVersion));
+  return artVersion;
+}
+
 const ART_SOURCES: Record<string, (id: string) => string> = {
   normal: (id) => `https://art.hearthstonejson.com/v1/render/latest/enUS/256x/${id}.png`,
   'normal-lg': (id) => `https://art.hearthstonejson.com/v1/render/latest/enUS/512x/${id}.png`,
@@ -37,11 +46,71 @@ const startedAt = Date.now();
 const app = express();
 app.use(express.json());
 
+interface RateBucket { count: number; resetAt: number }
+const ipBuckets = new Map<string, RateBucket>();
+const userBuckets = new Map<string, RateBucket>();
+const IP_LIMIT = 120;
+const USER_LIMIT = 200;
+const RATE_WINDOW = 60_000;
+
+function getIp(req: express.Request): string {
+  return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || 'unknown';
+}
+
+function checkRate(buckets: Map<string, RateBucket>, key: string, limit: number): boolean {
+  const now = Date.now();
+  let bucket = buckets.get(key);
+  if (!bucket || now >= bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + RATE_WINDOW };
+    buckets.set(key, bucket);
+  }
+  bucket.count++;
+  return bucket.count <= limit;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of ipBuckets) { if (now >= v.resetAt) ipBuckets.delete(k); }
+  for (const [k, v] of userBuckets) { if (now >= v.resetAt) userBuckets.delete(k); }
+}, 60_000);
+
+if (HOSTED_MODE) {
+  app.use('/api', (req, res, next) => {
+    if (!checkRate(ipBuckets, getIp(req), IP_LIMIT)) {
+      res.status(429).json({ error: 'Too many requests' });
+      return;
+    }
+    const token = req.headers['x-user-token'] as string | undefined;
+    if (token) {
+      const user = resolveUserByToken(token);
+      if (user && !checkRate(userBuckets, user.accountLo, USER_LIMIT)) {
+        res.status(429).json({ error: 'Too many requests' });
+        return;
+      }
+    }
+    next();
+  });
+
+  const HOSTED_BLOCKED = new Set(['/cards/refresh', '/card-art/clear-cache', '/cf/solve', '/meta/refresh']);
+  const AUTH_EXEMPT = new Set(['/auth/register', '/health']);
+  app.use('/api', (req: AuthRequest, res, next) => {
+    if (HOSTED_BLOCKED.has(req.path)) { res.status(403).json({ error: 'This action is disabled in hosted mode' }); return; }
+    if (AUTH_EXEMPT.has(req.path)) { next(); return; }
+    const token = req.headers['x-user-token'] as string | undefined;
+    if (!token) { res.status(401).json({ error: 'Authentication required' }); return; }
+    const user = resolveUserByToken(token);
+    if (!user) { res.status(401).json({ error: 'Invalid or expired token' }); return; }
+    req.userId = user.accountLo;
+    req.userDir = user.userDir;
+    next();
+  });
+}
+
 app.use('/art', express.static(CARD_ART_CACHE, {
-  maxAge: '7d',
+  maxAge: '365d',
   immutable: true,
   setHeaders: (res) => {
-    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   },
 }));
 
@@ -55,7 +124,7 @@ app.get('/art/:filename', async (req, res) => {
   const cacheKey = `${cardId}_${variant}`;
   const missFile = join(CARD_ART_CACHE, `${cacheKey}.miss`);
   if (existsSync(missFile)) {
-    res.set('Cache-Control', 'public, max-age=604800');
+    res.set('Cache-Control', 'no-cache');
     res.status(404).end();
     return;
   }
@@ -63,10 +132,10 @@ app.get('/art/:filename', async (req, res) => {
   const buffer = await fetchAndCacheArt(cacheKey, sourceFn(cardId));
   if (buffer) {
     res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'public, max-age=604800, immutable');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
     res.send(buffer);
   } else {
-    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Cache-Control', 'no-store');
     res.status(404).end();
   }
 });
@@ -169,6 +238,7 @@ app.get('/api/data-status', (_req, res) => {
     meta: { updatedAt: metaAge },
     cf,
     hostedMode: HOSTED_MODE,
+    artVersion,
   });
 });
 
@@ -185,7 +255,8 @@ app.post('/api/cards/refresh', rejectInHostedMode, async (_req, res) => {
   if (changedCardIds.length > 0) {
     prefetchCardsById(db, changedCardIds).catch(err => console.error('[Prefetch] Re-fetch error:', err));
   }
-  res.json({ count: Object.keys(db).length, expansions: exps.length, changed: changedCardIds.length, invalidated });
+  if (changedCardIds.length > 0) bumpArtVersion();
+  res.json({ count: Object.keys(db).length, expansions: exps.length, changed: changedCardIds.length, invalidated, artVersion });
 });
 
 app.post('/api/card-art/clear-cache', rejectInHostedMode, (_req, res) => {
@@ -211,7 +282,8 @@ app.post('/api/card-art/clear-cache', rejectInHostedMode, (_req, res) => {
     prefetchCardArt(cardDb).catch(err => console.error('[Prefetch] Error:', err));
   }
 
-  res.json({ queued: pngQueued, missCleared: missRemoved });
+  const newVersion = bumpArtVersion();
+  res.json({ queued: pngQueued, missCleared: missRemoved, artVersion: newVersion });
 });
 
 app.get('/api/expansions', (_req, res) => {
@@ -248,7 +320,19 @@ app.get('/api/cf/status', (_req, res) => {
   res.json(getCfStatus());
 });
 
+const SYNC_COOLDOWN = 5 * 60 * 1000;
+const userSyncTimes = new Map<string, number>();
+
 app.post('/api/collection/sync', authenticateUser, async (req: AuthRequest, res) => {
+  if (HOSTED_MODE) {
+    const lastSync = userSyncTimes.get(req.userId!) ?? 0;
+    if (Date.now() - lastSync < SYNC_COOLDOWN) {
+      const remaining = Math.ceil((SYNC_COOLDOWN - (Date.now() - lastSync)) / 1000);
+      res.status(429).json({ error: `Sync cooldown: try again in ${remaining}s` });
+      return;
+    }
+  }
+
   const tokenPath = join(req.userDir!, 'token.json');
   const tokenData: TokenData = JSON.parse(readFileSync(tokenPath, 'utf-8'));
   const sessionId = req.body?.sessionId || tokenData.sessionId;
@@ -298,27 +382,32 @@ app.post('/api/collection/sync', authenticateUser, async (req: AuthRequest, res)
     const dust = data.dust as number | undefined;
 
     let dbRefreshed = false;
+    let changedCards = 0;
     if (collection && cardDb) {
       const unknownIds = Object.keys(collection).filter(id => !cardDb![id]);
       if (unknownIds.length > 10) {
         console.log(`[Sync] ${unknownIds.length} unknown dbfIds — refreshing card DB`);
         try {
-          const { db } = await fetchAndCacheCardDb();
+          const { db, changedCardIds } = await fetchAndCacheCardDb();
           cardDb = db;
           await initExpansions();
           dbRefreshed = true;
+          changedCards = changedCardIds.length;
         } catch (e) {
           console.error('[Sync] Auto-refresh card DB failed:', e);
         }
       }
     }
 
+    const syncedAt = Date.now();
+    if (HOSTED_MODE) userSyncTimes.set(req.userId!, syncedAt);
     res.json({
       success: true,
       cards: Object.keys(collection || {}).length,
       dust: dust || 0,
-      syncedAt: Date.now(),
+      syncedAt,
       dbRefreshed,
+      changedCards,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -584,12 +673,12 @@ app.get('/api/card-art/:cardId/:variant', async (req, res) => {
   const missFile = join(CARD_ART_CACHE, `${cacheKey}.miss`);
 
   if (existsSync(cacheFile)) {
-    res.sendFile(cacheFile, { headers: { 'Cache-Control': 'public, max-age=604800' } });
+    res.sendFile(cacheFile, { headers: { 'Cache-Control': 'public, max-age=31536000, immutable' } });
     return;
   }
 
   if (existsSync(missFile)) {
-    res.set('Cache-Control', 'public, max-age=604800');
+    res.set('Cache-Control', 'no-cache');
     res.status(404).end();
     return;
   }
@@ -597,10 +686,10 @@ app.get('/api/card-art/:cardId/:variant', async (req, res) => {
   const buffer = await fetchAndCacheArt(cacheKey, sourceFn(cardId));
   if (buffer) {
     res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'public, max-age=604800');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
     res.send(buffer);
   } else {
-    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Cache-Control', 'no-store');
     res.status(404).end();
   }
 });
@@ -614,27 +703,25 @@ app.get('/api/prefetch-status', (_req, res) => {
 app.get('/api/card-art/cache-stats', (_req, res) => {
   const totalCards = cardDb ? Object.keys(cardDb).length : 0;
 
-  const expansions = getAllExpansions();
-  const sigEligibleSets = new Set(expansions.filter(e => e.yearNum >= 2022).map(e => e.code));
-  let sigEligible = 0, diaEligible = 0;
+  let sigTotal = 0, diaTotal = 0;
   if (cardDb) {
     for (const card of Object.values(cardDb)) {
-      if (sigEligibleSets.has(card.set)) sigEligible++;
-      if (card.rarity === 'LEGENDARY') diaEligible++;
+      if (card.hasSignature) sigTotal++;
+      if (card.hasDiamond) diaTotal++;
     }
   }
 
   const empty = (total: number) => ({ cached: 0, missed: 0, total });
   if (!existsSync(CARD_ART_CACHE)) {
-    res.json({ cached: 0, missed: 0, totalCards, variants: { normal: empty(totalCards), golden: empty(totalCards), signature: empty(sigEligible), diamond: empty(diaEligible) } });
+    res.json({ cached: 0, missed: 0, totalCards, variants: { normal: empty(totalCards), golden: empty(totalCards), signature: empty(sigTotal), diamond: empty(diaTotal) } });
     return;
   }
   const files = readdirSync(CARD_ART_CACHE);
   const variants: Record<string, { cached: number; missed: number; total: number }> = {
     normal: { cached: 0, missed: 0, total: totalCards },
     golden: { cached: 0, missed: 0, total: totalCards },
-    signature: { cached: 0, missed: 0, total: sigEligible },
-    diamond: { cached: 0, missed: 0, total: diaEligible },
+    signature: { cached: 0, missed: 0, total: sigTotal },
+    diamond: { cached: 0, missed: 0, total: diaTotal },
   };
   let cached = 0, missed = 0;
   for (const f of files) {
@@ -645,34 +732,14 @@ app.get('/api/card-art/cache-stats', (_req, res) => {
     if (isMiss) missed++;
     const m = f.match(/_([a-z]+(?:-lg)?)\.(png|miss)$/);
     if (!m) continue;
-    const v = m[1] === 'normal-lg' ? 'normal' : m[1];
+    const v = m[1];
+    if (v === 'normal-lg') continue;
     if (variants[v]) {
       if (isPng) variants[v].cached++;
       if (isMiss) variants[v].missed++;
     }
   }
   res.json({ cached, missed, totalCards, variants });
-});
-
-app.get('/api/variant-availability', (_req, res) => {
-  if (!existsSync(CARD_ART_CACHE)) {
-    res.json({ signatureConfirmed: [], diamondConfirmed: [] });
-    return;
-  }
-  const files = readdirSync(CARD_ART_CACHE);
-  const signatureConfirmed: string[] = [];
-  const diamondConfirmed: string[] = [];
-
-  for (const file of files) {
-    if (!file.endsWith('.png')) continue;
-    if (file.endsWith('_signature.png')) {
-      signatureConfirmed.push(file.replace('_signature.png', ''));
-    } else if (file.endsWith('_diamond.png')) {
-      diamondConfirmed.push(file.replace('_diamond.png', ''));
-    }
-  }
-
-  res.json({ signatureConfirmed, diamondConfirmed });
 });
 
 const distDir = join(__dirname, '..', 'dist');
@@ -704,8 +771,6 @@ function invalidateArtForCards(cardIds: string[]): number {
 async function prefetchCardsById(db: CardDb, cardIds: string[]): Promise<void> {
   const idSet = new Set(cardIds);
   const cards = Object.values(db).filter(c => idSet.has(c.id));
-  const expansions = getAllExpansions();
-  const sigEligibleSets = new Set(expansions.filter(e => e.yearNum >= 2022).map(e => e.code));
 
   console.log(`[Prefetch] Re-fetching art for ${cards.length} changed cards`);
 
@@ -714,8 +779,8 @@ async function prefetchCardsById(db: CardDb, cardIds: string[]): Promise<void> {
     if (!sourceFn) continue;
     const tasks: PrefetchTask[] = [];
     for (const card of cards) {
-      if (variant === 'signature' && !sigEligibleSets.has(card.set)) continue;
-      if (variant === 'diamond' && card.rarity !== 'LEGENDARY') continue;
+      if (variant === 'signature' && !card.hasSignature) continue;
+      if (variant === 'diamond' && !card.hasDiamond) continue;
       const cacheKey = `${card.id}_${variant}`;
       if (existsSync(join(CARD_ART_CACHE, `${cacheKey}.png`))) continue;
       tasks.push({ cacheKey, url: sourceFn(card.id) });
@@ -780,8 +845,6 @@ async function prefetchBatch(
 
 async function prefetchCardArt(db: CardDb): Promise<void> {
   const cards = Object.values(db);
-  const expansions = getAllExpansions();
-  const sigEligibleSets = new Set(expansions.filter(e => e.yearNum >= 2022).map(e => e.code));
 
   let collectionData: Record<string, number[]> = {};
   const usersPath = join(DATA_DIR, 'users');
@@ -817,9 +880,10 @@ async function prefetchCardArt(db: CardDb): Promise<void> {
 
   console.log(`[Prefetch] Collection: ${ownedCardIds.size} owned, ${ownedDiamondIds.size} diamond, ${ownedSignatureIds.size} signature`);
 
-  const isOwned = (c: { id: string }) => ownedCardIds.has(c.id);
-  const isNotOwned = (c: { id: string }) => !ownedCardIds.has(c.id);
-  const isSigEligible = (c: { set: string }) => sigEligibleSets.has(c.set);
+  const hasSig = (c: CardDbEntry) => c.hasSignature === true;
+  const hasDia = (c: CardDbEntry) => c.hasDiamond === true;
+  const isOwned = (c: CardDbEntry) => ownedCardIds.has(c.id);
+  const isNotOwned = (c: CardDbEntry) => !ownedCardIds.has(c.id);
 
   interface PassConfig {
     label: string
@@ -827,33 +891,30 @@ async function prefetchCardArt(db: CardDb): Promise<void> {
     concurrency: number
     delayMs: number
     maxRetries: number
-    filter: (card: { id: string; set: string; rarity: string }) => boolean
+    filter: (card: CardDbEntry) => boolean
   }
 
   const passes: PassConfig[] = [
-    // Phase 1: Premium variants we OWN
-    { label: 'owned-diamond', variant: 'diamond', concurrency: 3, delayMs: 500, maxRetries: 3,
-      filter: (c) => ownedDiamondIds.has(c.id) },
-    { label: 'owned-signature', variant: 'signature', concurrency: 3, delayMs: 500, maxRetries: 3,
-      filter: (c) => ownedSignatureIds.has(c.id) },
-    // Phase 2: All other variants of owned cards
+    // Phase 1: Owned cards (prioritize what user actually has)
     { label: 'owned-normal', variant: 'normal', concurrency: 10, delayMs: 50, maxRetries: 1,
       filter: isOwned },
+    { label: 'owned-diamond', variant: 'diamond', concurrency: 3, delayMs: 500, maxRetries: 3,
+      filter: (c) => hasDia(c) && ownedDiamondIds.has(c.id) },
+    { label: 'owned-signature', variant: 'signature', concurrency: 3, delayMs: 500, maxRetries: 3,
+      filter: (c) => hasSig(c) && ownedSignatureIds.has(c.id) },
     { label: 'owned-golden', variant: 'golden', concurrency: 3, delayMs: 500, maxRetries: 5,
       filter: isOwned },
-    { label: 'owned-sig-eligible', variant: 'signature', concurrency: 3, delayMs: 500, maxRetries: 3,
-      filter: (c) => isOwned(c) && !ownedSignatureIds.has(c.id) && isSigEligible(c) },
-    { label: 'owned-diamond-eligible', variant: 'diamond', concurrency: 3, delayMs: 500, maxRetries: 3,
-      filter: (c) => isOwned(c) && !ownedDiamondIds.has(c.id) && c.rarity === 'LEGENDARY' },
-    // Phase 3: Unowned cards
+    // Phase 2: All normals
     { label: 'unowned-normal', variant: 'normal', concurrency: 10, delayMs: 50, maxRetries: 1,
       filter: isNotOwned },
-    { label: 'unowned-golden', variant: 'golden', concurrency: 3, delayMs: 500, maxRetries: 5,
-      filter: isNotOwned },
-    { label: 'unowned-signature', variant: 'signature', concurrency: 3, delayMs: 500, maxRetries: 3,
-      filter: (c) => isNotOwned(c) && isSigEligible(c) },
-    { label: 'unowned-diamond', variant: 'diamond', concurrency: 3, delayMs: 500, maxRetries: 3,
-      filter: (c) => isNotOwned(c) && c.rarity === 'LEGENDARY' },
+    // Phase 3: All premium (not golden) — cache check skips already-fetched owned items
+    { label: 'all-diamond', variant: 'diamond', concurrency: 3, delayMs: 500, maxRetries: 3,
+      filter: hasDia },
+    { label: 'all-signature', variant: 'signature', concurrency: 3, delayMs: 500, maxRetries: 3,
+      filter: hasSig },
+    // Phase 4: Golden LAST
+    { label: 'all-golden', variant: 'golden', concurrency: 3, delayMs: 500, maxRetries: 5,
+      filter: () => true },
   ];
 
   const eligibleCounts = passes.map(p => cards.filter(p.filter).length);

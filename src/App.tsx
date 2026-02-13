@@ -22,29 +22,32 @@ export default function App() {
   const fetchCollection = useStore(s => s.fetchCollection)
   const fetchExpansions = useStore(s => s.fetchExpansions)
   const fetchMeta = useStore(s => s.fetchMeta)
-  const fetchVariantAvailability = useStore(s => s.fetchVariantAvailability)
-
   useCollectionSnapshots()
 
   useEffect(() => {
     if (!authenticated) return
 
     async function init() {
-      if (!getStoredAccountId()) {
-        try {
-          const me = await api.getMe()
+      try {
+        const me = await api.getMe()
+        useStore.getState().setBattletag(me.battletag)
+        if (!getStoredAccountId()) {
           setStoredAccountId(me.accountLo)
           migrateLocalStorage(me.accountLo)
           useStore.getState().reloadCraftQueue()
-        } catch { /* 401 will redirect */ }
-      }
+        }
+      } catch { /* 401 will redirect */ }
+
+      api.getDataStatus().then(status => {
+        if (status.hostedMode) useStore.getState().setHostedMode(true)
+        if (status.artVersion) useStore.setState({ artVersion: status.artVersion })
+      }).catch(() => {})
 
       await Promise.all([
         fetchCards(),
         fetchCollection(),
         fetchExpansions(),
         fetchMeta(),
-        fetchVariantAvailability(),
       ])
 
       const { collection, syncCollection, addToast } = useStore.getState()
@@ -61,7 +64,7 @@ export default function App() {
     }
 
     init()
-  }, [authenticated, fetchCards, fetchCollection, fetchExpansions, fetchMeta, fetchVariantAvailability])
+  }, [authenticated, fetchCards, fetchCollection, fetchExpansions, fetchMeta])
 
   if (!authenticated) {
     return <OnboardingPopup onComplete={() => setAuthenticated(true)} />

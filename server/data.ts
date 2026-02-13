@@ -31,6 +31,8 @@ export interface CardDbEntry {
   text?: string;
   freeNormal?: boolean;
   freeGolden?: boolean;
+  hasSignature?: boolean;
+  hasDiamond?: boolean;
 }
 
 export type CardDb = Record<string, CardDbEntry>;
@@ -228,19 +230,53 @@ export interface CardDbRefreshResult {
   changedCardIds: string[];
 }
 
+function normalizeCardText(text?: string): string {
+  if (!text) return '';
+  return text.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+}
+
 function cardEntryChanged(a: CardDbEntry, b: CardDbEntry): boolean {
   return a.name !== b.name || a.set !== b.set || a.rarity !== b.rarity
     || a.type !== b.type || a.cardClass !== b.cardClass || a.cost !== b.cost
-    || a.attack !== b.attack || a.health !== b.health || a.text !== b.text
-    || a.freeNormal !== b.freeNormal || a.freeGolden !== b.freeGolden;
+    || a.attack !== b.attack || a.health !== b.health
+    || normalizeCardText(a.text) !== normalizeCardText(b.text)
+    || a.freeNormal !== b.freeNormal || a.freeGolden !== b.freeGolden
+    || a.hasSignature !== b.hasSignature || a.hasDiamond !== b.hasDiamond;
+}
+
+async function fetchSignatureFlags(): Promise<Set<string>> {
+  console.log('Fetching signature flags from HearthstoneJSON XML...');
+  const res = await fetch('https://api.hearthstonejson.com/v1/latest/CardDefs.xml');
+  const xml = await res.text();
+
+  const sigCardIds = new Set<string>();
+  const SIG_TAG = 'enumID="2589"';
+  let pos = 0;
+  while ((pos = xml.indexOf(SIG_TAG, pos)) !== -1) {
+    const entityStart = xml.lastIndexOf('<Entity CardID="', pos);
+    if (entityStart !== -1) {
+      const idStart = entityStart + 16;
+      const idEnd = xml.indexOf('"', idStart);
+      if (idEnd !== -1) sigCardIds.add(xml.substring(idStart, idEnd));
+    }
+    pos += SIG_TAG.length;
+  }
+  console.log(`Found ${sigCardIds.size} cards with HAS_SIGNATURE_QUALITY`);
+  return sigCardIds;
 }
 
 export async function fetchAndCacheCardDb(): Promise<CardDbRefreshResult> {
   console.log('Fetching card database from HearthstoneJSON...');
   const oldDb = loadCardDb();
 
-  const res = await fetch('https://api.hearthstonejson.com/v1/latest/enUS/cards.collectible.json');
-  const cards: Record<string, unknown>[] = await res.json() as Record<string, unknown>[];
+  const [jsonRes, signatureIds] = await Promise.all([
+    fetch('https://api.hearthstonejson.com/v1/latest/enUS/cards.collectible.json'),
+    fetchSignatureFlags().catch(err => {
+      console.error('Failed to fetch signature flags:', err.message);
+      return new Set<string>();
+    }),
+  ]);
+  const cards: Record<string, unknown>[] = await jsonRes.json() as Record<string, unknown>[];
 
   const db: CardDb = {};
   const validRarities = new Set(['COMMON', 'RARE', 'EPIC', 'LEGENDARY']);
@@ -262,6 +298,8 @@ export async function fetchAndCacheCardDb(): Promise<CardDbRefreshResult> {
     };
     if (card.howToEarn) entry.freeNormal = true;
     if (card.howToEarnGolden) entry.freeGolden = true;
+    if (card.hasDiamondSkin) entry.hasDiamond = true;
+    if (signatureIds.has(entry.id)) entry.hasSignature = true;
     db[String(card.dbfId)] = entry;
   }
 

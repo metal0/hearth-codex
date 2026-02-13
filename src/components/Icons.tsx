@@ -1,4 +1,3 @@
-const HS_ICONS_CDN = 'https://cdn.jsdelivr.net/gh/HearthSim/hs-icons@latest/SVG'
 const WIKI = 'https://hearthstone.wiki.gg/images'
 
 interface IconProps {
@@ -15,6 +14,7 @@ function WikiIcon({ url, size = 14, className }: IconProps & { url: string }) {
       height={size}
       className={`inline-block shrink-0 ${className ?? ''}`}
       style={{ objectFit: 'contain' }}
+      referrerPolicy="no-referrer"
     />
   )
 }
@@ -41,11 +41,11 @@ function MaskIcon({ url, size = 14, className }: IconProps & { url: string }) {
 }
 
 export function WildIcon({ size = 14, className }: IconProps) {
-  return <MaskIcon url={`${HS_ICONS_CDN}/Mode_Wild.svg`} size={size} className={className} />
+  return <MaskIcon url="/icons/mode-wild.svg" size={size} className={className} />
 }
 
 export function StandardIcon({ size = 14, className }: IconProps) {
-  return <MaskIcon url={`${HS_ICONS_CDN}/Mode_Standard_Gryphon.svg`} size={size} className={className} />
+  return <MaskIcon url="/icons/mode-standard.svg" size={size} className={className} />
 }
 
 export function DustIcon({ size = 14, className }: IconProps) {
@@ -102,10 +102,6 @@ export function CalculatorIcon({ size = 18, className }: IconProps) {
   return <GoldIcon size={size} className={className} />
 }
 
-export function SettingsIcon({ size = 18, className }: IconProps) {
-  return <WikiIcon url={`${WIKI}/thumb/Cog-wheel.jpg/${Math.round(size * 3)}px-Cog-wheel.jpg`} size={size} className={className} />
-}
-
 export function HistoryIcon({ size = 18, className }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -152,11 +148,46 @@ const PACK_IMAGE_MAP: Record<string, number> = {
   EMERALD_DREAM: 975,
   THE_LOST_CITY: 982,
   TIME_TRAVEL: 989,
+  STANDARD: 713,
+  WILD: 714,
 }
 
-export function ExpansionPackIcon({ code, size = 24, className }: IconProps & { code: string }) {
-  const num = PACK_IMAGE_MAP[code]
-  if (!num) return null
+export function ExpansionPackIcon({ code, size = 24, className, golden }: IconProps & { code: string; golden?: boolean }) {
+  const map = golden ? GOLDEN_PACK_IMAGE_MAP : PACK_IMAGE_MAP
+  const num = map[code]
+  if (!num) {
+    if (golden) {
+      const normalNum = PACK_IMAGE_MAP[code]
+      if (!normalNum) return null
+      const px = Math.round(size * 3)
+      return <WikiIcon url={`${WIKI}/thumb/CardPack${normalNum}.png/${px}px-CardPack${normalNum}.png`} size={size} className={className} />
+    }
+    return null
+  }
   const px = Math.round(size * 3)
   return <WikiIcon url={`${WIKI}/thumb/CardPack${num}.png/${px}px-CardPack${num}.png`} size={size} className={className} />
+}
+
+const GOLDEN_PACK_IMAGE_MAP: Record<string, number> = {
+  EXPERT1: 23,
+  BLACK_TEMPLE: 939,
+  SCHOLOMANCE: 603,
+  DARKMOON_FAIRE: 643,
+  THE_BARRENS: 686,
+  STORMWIND: 737,
+  ALTERAC_VALLEY: 841,
+  THE_SUNKEN_CITY: 850,
+  REVENDRETH: 874,
+  RETURN_OF_THE_LICH_KING: 921,
+  BATTLE_OF_THE_BANDS: 932,
+  TITANS: 937,
+  WILD_WEST: 952,
+  WHIZBANGS_WORKSHOP: 970,
+  ISLAND_VACATION: 977,
+  SPACE: 986,
+  EMERALD_DREAM: 990,
+  THE_LOST_CITY: 1040,
+  TIME_TRAVEL: 1055,
+  STANDARD: 716,
+  WILD: 904,
 }

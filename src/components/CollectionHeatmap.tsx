@@ -23,8 +23,12 @@ type HeatmapRow = {
 function cellColor(pct: number): string {
   if (pct >= 100) return 'rgba(34, 197, 94, 0.35)'
   if (pct === 0) return 'rgba(255, 255, 255, 0.03)'
-  const alpha = 0.05 + (pct / 100) * 0.30
-  return `rgba(34, 197, 94, ${alpha.toFixed(2)})`
+  const t = pct / 100
+  const r = Math.round(245 * (1 - t) + 34 * t)
+  const g = Math.round(158 * (1 - t) + 197 * t)
+  const b = Math.round(11 * (1 - t) + 94 * t)
+  const alpha = 0.08 + t * 0.27
+  return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(2)})`
 }
 
 function buildRows(cards: EnrichedCard[], expansions: Expansion[]): HeatmapRow[] {
@@ -78,11 +82,10 @@ export default function CollectionHeatmap() {
   const collection = useStore(s => s.collection)
   const expansions = useStore(s => s.expansions)
   const collectionMode = useStore(s => s.collectionMode)
-  const variantConfirmed = useStore(s => s.variantConfirmed)
   const [formatFilter, setFormatFilter] = useState<'all' | 'standard' | 'wild'>('all')
 
   const enriched = useMemo(() => getEnrichedCards(), [
-    getEnrichedCards, cards, collection, collectionMode, variantConfirmed,
+    getEnrichedCards, cards, collection, collectionMode,
   ])
 
   const rows = useMemo(() => {

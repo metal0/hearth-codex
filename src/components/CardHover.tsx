@@ -10,6 +10,7 @@ interface CardHoverProps {
 export default function CardHover({ id, name, className }: CardHoverProps) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
   const collectionMode = useStore(s => s.collectionMode)
+  const av = useStore(s => s.artVersion)
 
   const handleEnter = useCallback((e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -22,14 +23,12 @@ export default function CardHover({ id, name, className }: CardHoverProps) {
     })
   }, [])
 
-  const baseUrl = `/art/${id}_normal.png`
-  const imgUrl = collectionMode === 'golden'
-    ? `/art/${id}_golden.png`
-    : collectionMode === 'signature'
-      ? `/art/${id}_signature.png`
-      : collectionMode === 'diamond'
-        ? `/art/${id}_diamond.png`
-        : baseUrl
+  const a = (v: string) => `/art/${id}_${v}.png?v=${av}`
+  const baseUrl = a('normal')
+  const imgUrl = collectionMode === 'golden' ? a('golden')
+    : collectionMode === 'signature' ? a('signature')
+    : collectionMode === 'diamond' ? a('diamond')
+    : baseUrl
 
   return (
     <span
@@ -45,7 +44,7 @@ export default function CardHover({ id, name, className }: CardHoverProps) {
           style={{ left: pos.x, top: pos.y, transform: 'translateY(-25%)' }}
           alt={name}
           onError={e => {
-            if (!(e.target as HTMLImageElement).src.endsWith('_normal.png')) {
+            if (!(e.target as HTMLImageElement).src.includes('_normal.png')) {
               (e.target as HTMLImageElement).src = baseUrl
             }
           }}

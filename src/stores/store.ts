@@ -2,8 +2,9 @@ import { create } from 'zustand';
 import type {
   CardDb, Expansion, CollectionData, CalculatorResponse,
   OwnershipFilter, FormatFilter, SortOption, EnrichedCard, Rarity, CollectionMode,
+  ObtainabilityFilter,
 } from '../types.ts';
-import { RARITY_ORDER, DUST_COST, HS_CLASSES } from '../types.ts';
+import { RARITY_ORDER, DUST_COST, HS_CLASSES, getDiamondAcquisition, getSignatureAcquisition } from '../types.ts';
 
 const CLASS_ORDER = Object.fromEntries(HS_CLASSES.map((c, i) => [c, i === 0 ? 99 : i])) as Record<string, number>;
 
@@ -39,18 +40,12 @@ export interface Toast {
   type: 'success' | 'error';
 }
 
-interface VariantConfirmed {
-  signature: Set<string>;
-  diamond: Set<string>;
-}
-
 interface AppState {
   cards: CardDb;
   expansions: Expansion[];
   collection: CollectionData | null;
   metaStandard: Record<string, MetaEntry>;
   metaWild: Record<string, MetaEntry>;
-  variantConfirmed: VariantConfirmed;
 
   cardsLoading: boolean;
   collectionLoading: boolean;
@@ -69,6 +64,7 @@ interface AppState {
   selectedClasses: string[];
   selectedRarities: Rarity[];
   ownershipFilter: OwnershipFilter;
+  obtainabilityFilter: ObtainabilityFilter;
   formatFilter: FormatFilter;
   searchText: string;
   sortBy: SortOption;
@@ -80,7 +76,6 @@ interface AppState {
   fetchCollection: () => Promise<void>;
   fetchExpansions: () => Promise<void>;
   fetchMeta: () => Promise<void>;
-  fetchVariantAvailability: () => Promise<void>;
   autoSync: () => Promise<void>;
   dismissError: (index: number) => void;
   collectionSyncedAt: number | null;
@@ -92,6 +87,7 @@ interface AppState {
   setSelectedClasses: (classes: string[]) => void;
   setSelectedRarities: (rarities: Rarity[]) => void;
   setOwnershipFilter: (filter: OwnershipFilter) => void;
+  setObtainabilityFilter: (filter: ObtainabilityFilter) => void;
   setFormatFilter: (filter: FormatFilter) => void;
   setSearchText: (text: string) => void;
   setSortBy: (sort: SortOption) => void;
@@ -99,6 +95,9 @@ interface AppState {
 
   battletag: string | null;
   setBattletag: (tag: string | null) => void;
+  artVersion: number;
+  hostedMode: boolean;
+  setHostedMode: (hosted: boolean) => void;
   logout: () => void;
 
   craftQueue: string[];
@@ -117,7 +116,6 @@ export const useStore = create<AppState>((set, get) => ({
   collection: null,
   metaStandard: {},
   metaWild: {},
-  variantConfirmed: { signature: new Set<string>(), diamond: new Set<string>() },
 
   cardsLoading: false,
   collectionLoading: false,
@@ -139,6 +137,7 @@ export const useStore = create<AppState>((set, get) => ({
   selectedClasses: [],
   selectedRarities: [],
   ownershipFilter: 'all',
+  obtainabilityFilter: 'all',
   formatFilter: 'standard',
   searchText: '',
   sortBy: 'rarity',
@@ -148,6 +147,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   battletag: null,
   setBattletag: (tag) => set({ battletag: tag }),
+  artVersion: 1,
+  hostedMode: false,
+  setHostedMode: (hosted) => set({ hostedMode: hosted }),
   logout: () => { clearStoredToken(); window.location.reload(); },
 
   craftQueue: loadCraftQueue(),
@@ -211,20 +213,6 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  fetchVariantAvailability: async () => {
-    try {
-      const data = await api.getVariantAvailability();
-      set({
-        variantConfirmed: {
-          signature: new Set(data.signatureConfirmed),
-          diamond: new Set(data.diamondConfirmed),
-        },
-      });
-    } catch (err) {
-      console.error('Failed to fetch variant availability:', err);
-    }
-  },
-
   syncCollection: async (sessionId?: string) => {
     set({ syncLoading: true });
     try {
@@ -233,7 +221,9 @@ export const useStore = create<AppState>((set, get) => ({
         if (result.dbRefreshed) {
           await get().fetchCards();
           await get().fetchExpansions();
-          get().addToast('Card database auto-updated (new cards detected)', 'success');
+          if (!get().hostedMode || result.changedCards > 0) {
+            get().addToast(`Card database auto-updated (${result.changedCards || 'new'} cards detected)`, 'success');
+          }
         }
         await get().fetchCollection();
         set({ collectionSyncedAt: Date.now() });
@@ -281,6 +271,7 @@ export const useStore = create<AppState>((set, get) => ({
 
     try {
       const status = await api.getDataStatus();
+      if (status.artVersion) set({ artVersion: status.artVersion });
 
       if (!status.cardDb.updatedAt || Date.now() - status.cardDb.updatedAt > ONE_DAY) {
         try {
@@ -313,20 +304,25 @@ export const useStore = create<AppState>((set, get) => ({
     dataErrors: s.dataErrors.filter((_, i) => i !== index),
   })),
 
-  setCollectionMode: (mode) => set({ collectionMode: mode }),
+  setCollectionMode: (mode) => set(s => ({
+    collectionMode: mode,
+    obtainabilityFilter: (mode === 'normal' || mode === 'golden') ? 'all' as const : s.obtainabilityFilter,
+  })),
   setSelectedSets: (sets) => set({ selectedSets: sets }),
   setSelectedClasses: (classes) => set({ selectedClasses: classes }),
   setSelectedRarities: (rarities) => set({ selectedRarities: rarities }),
   setOwnershipFilter: (filter) => set({ ownershipFilter: filter }),
+  setObtainabilityFilter: (filter) => set({ obtainabilityFilter: filter }),
   setFormatFilter: (filter) => set({ formatFilter: filter }),
   setSearchText: (text) => set({ searchText: text }),
   setSortBy: (sort) => set({ sortBy: sort }),
   toggleSortDirection: () => set(s => ({ sortAsc: !s.sortAsc })),
 
   getEnrichedCards: () => {
-    const { cards, collection, metaStandard, metaWild, collectionMode, expansions, formatFilter, variantConfirmed } = get();
+    const { cards, collection, metaStandard, metaWild, collectionMode, expansions, formatFilter, artVersion } = get();
     const meta = formatFilter === 'wild' ? metaWild : metaStandard;
     const enriched: EnrichedCard[] = [];
+    const av = artVersion;
 
     const setYearNum = new Map<string, number>();
     for (const exp of expansions) setYearNum.set(exp.code, exp.yearNum);
@@ -340,25 +336,22 @@ export const useStore = create<AppState>((set, get) => ({
       const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2;
       const metaEntry = meta[dbfId];
 
-      const sigVariantExists = variantConfirmed.signature.has(card.id);
-      const diaVariantExists = variantConfirmed.diamond.has(card.id);
-
       let totalOwned: number;
       switch (collectionMode) {
         case 'golden':
           totalOwned = Math.min(golden + diamond + signature, maxCopies);
           break;
         case 'signature':
-          totalOwned = (sigVariantExists || signature > 0) ? Math.min(signature + diamond, maxCopies) : maxCopies;
+          totalOwned = (card.hasSignature || signature > 0) ? Math.min(signature + diamond, maxCopies) : maxCopies;
           break;
         case 'diamond':
-          totalOwned = (diaVariantExists || diamond > 0) ? Math.min(diamond, maxCopies) : maxCopies;
+          totalOwned = (card.hasDiamond || diamond > 0) ? Math.min(diamond, maxCopies) : maxCopies;
           break;
         default:
           totalOwned = Math.min(normal + golden + diamond + signature, maxCopies);
       }
 
-      const art = (v: string) => `/art/${card.id}_${v}.png`
+      const art = (v: string) => `/art/${card.id}_${v}.png?v=${av}`
       const bestOwned =
         diamond > 0 ? art('diamond')
         : signature > 0 ? art('signature')
@@ -404,6 +397,8 @@ export const useStore = create<AppState>((set, get) => ({
         decks: metaEntry?.decks ?? 0,
         freeNormal: card.freeNormal,
         freeGolden: card.freeGolden,
+        hasSignature: card.hasSignature,
+        hasDiamond: card.hasDiamond,
       });
     }
 
@@ -415,7 +410,7 @@ export const useStore = create<AppState>((set, get) => ({
     let cards = state.getEnrichedCards();
     const {
       selectedSets, selectedClasses, selectedRarities,
-      ownershipFilter, formatFilter, searchText, sortBy, sortAsc, expansions,
+      ownershipFilter, obtainabilityFilter, formatFilter, searchText, sortBy, sortAsc, expansions,
       collection, collectionMode,
     } = state;
 
@@ -425,11 +420,9 @@ export const useStore = create<AppState>((set, get) => ({
     }
 
     if (collectionMode === 'diamond') {
-      const { variantConfirmed } = state;
-      cards = cards.filter(c => variantConfirmed.diamond.has(c.id) || c.diamondCount > 0)
+      cards = cards.filter(c => c.hasDiamond || c.diamondCount > 0)
     } else if (collectionMode === 'signature') {
-      const { variantConfirmed } = state;
-      cards = cards.filter(c => variantConfirmed.signature.has(c.id) || c.signatureCount > 0)
+      cards = cards.filter(c => c.hasSignature || c.signatureCount > 0)
     }
 
     if (selectedSets.length > 0) {
@@ -451,6 +444,17 @@ export const useStore = create<AppState>((set, get) => ({
       cards = cards.filter(c => c.totalOwned >= c.maxCopies);
     } else if (ownershipFilter === 'incomplete') {
       cards = cards.filter(c => c.totalOwned < c.maxCopies);
+    }
+
+    if (obtainabilityFilter !== 'all' && (collectionMode === 'diamond' || collectionMode === 'signature')) {
+      const wantObtainable = obtainabilityFilter === 'obtainable';
+      cards = cards.filter(c => {
+        const acq = collectionMode === 'diamond'
+          ? getDiamondAcquisition(c.id)
+          : getSignatureAcquisition(c.id, c.set, c.rarity);
+        const isObtainable = acq?.obtainable ?? true;
+        return wantObtainable ? isObtainable : !isObtainable;
+      });
     }
 
     if (searchText.trim()) {

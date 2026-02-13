@@ -8,8 +8,7 @@ export default function SettingsView() {
   const fetchCards = useStore(s => s.fetchCards)
   const fetchMeta = useStore(s => s.fetchMeta)
   const addToast = useStore(s => s.addToast)
-  const battletag = useStore(s => s.battletag)
-  const logout = useStore(s => s.logout)
+  const hostedMode = useStore(s => s.hostedMode)
 
   const [sessionInput, setSessionInput] = useState('')
   const [showReauth, setShowReauth] = useState(false)
@@ -20,18 +19,11 @@ export default function SettingsView() {
   const [cfStatus, setCfStatus] = useState<{ valid: boolean; expiresIn: number } | null>(null)
   const [cfSolving, setCfSolving] = useState(false)
   const [cacheStats, setCacheStats] = useState<{ cached: number; missed: number; totalCards: number; variants: Record<string, { cached: number; missed: number; total: number }> } | null>(null)
-  const [hostedMode, setHostedMode] = useState(false)
 
   useEffect(() => {
-    api.getMe().then(me => {
-      useStore.getState().setBattletag(me.battletag)
-    }).catch(() => {})
-
     api.getDataStatus().then(status => {
       setCfStatus(status.cf)
-      if (status.hostedMode) setHostedMode(true)
     }).catch(() => {})
-
     api.getArtCacheStats().then(setCacheStats).catch(() => {})
   }, [])
 
@@ -73,43 +65,13 @@ export default function SettingsView() {
     }
   }
 
-  async function handleRefreshCardDb() {
-    setRefreshing(true)
-    try {
-      const result = await api.refreshCards()
-      await fetchCards()
-      setSyncResult({ success: true, message: `Card database refreshed: ${result.count} cards` })
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to refresh'
-      setSyncResult({ success: false, message })
-    } finally {
-      setRefreshing(false)
-    }
-  }
-
   return (
     <div className="p-6 max-w-2xl">
       <h1 className="text-xl font-bold text-gold mb-6">Settings</h1>
 
-      {/* Account */}
+      {/* Collection Sync */}
       <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-bold text-white">Account</h2>
-            <div className="w-2 h-2 rounded-full bg-green-400" />
-          </div>
-          <button
-            onClick={logout}
-            className="px-3 py-1.5 bg-red-900/30 text-red-400 rounded text-xs hover:bg-red-900/50 transition-colors"
-          >
-            Log out
-          </button>
-        </div>
-
-        {battletag && (
-          <p className="text-sm text-gray-300 mb-4">Logged in as <span className="text-gold font-medium">{battletag}</span></p>
-        )}
-
+        <h2 className="text-sm font-bold text-white mb-3">Collection Sync</h2>
         <div className="flex gap-2 mb-4">
           <button
             onClick={handleSync}
@@ -185,7 +147,20 @@ export default function SettingsView() {
               images, and stats for all expansions.
             </p>
             <button
-              onClick={handleRefreshCardDb}
+              onClick={async () => {
+                setRefreshing(true)
+                try {
+                  const result = await api.refreshCards()
+                  if (result.artVersion) useStore.setState({ artVersion: result.artVersion })
+                  await fetchCards()
+                  setSyncResult({ success: true, message: `Card database refreshed: ${result.count} cards` })
+                } catch (err: unknown) {
+                  const message = err instanceof Error ? err.message : 'Failed to refresh'
+                  setSyncResult({ success: false, message })
+                } finally {
+                  setRefreshing(false)
+                }
+              }}
               disabled={refreshing}
               className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
                          hover:bg-white/15 transition-colors disabled:opacity-40"
@@ -228,9 +203,8 @@ export default function SettingsView() {
       <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
         <h2 className="text-sm font-bold text-white mb-3">Card Art Cache</h2>
         <p className="text-xs text-gray-400 mb-3">
-          {hostedMode
-            ? 'Card art variants are cached server-side and refreshed automatically.'
-            : 'Card art (golden, signature, diamond variants) is cached locally to avoid repeated requests to external sources. Clear the cache if card art appears incorrect or outdated.'}
+          Card art (golden, signature, diamond variants) is cached locally to avoid repeated
+          requests to external sources. Clear the cache if card art appears incorrect or outdated.
         </p>
         {cacheStats && (
           <div className="mb-3 space-y-2">
@@ -275,7 +249,8 @@ export default function SettingsView() {
             onClick={async () => {
               try {
                 const result = await api.clearArtCache()
-                setSyncResult({ success: true, message: `Art cache cleared: ${result.cleared} files removed` })
+                if (result.artVersion) useStore.setState({ artVersion: result.artVersion })
+                setSyncResult({ success: true, message: `Art cache cleared: ${result.missCleared} miss files removed` })
                 const tc = cacheStats?.totalCards ?? 0;
                 setCacheStats({ cached: 0, missed: 0, totalCards: tc, variants: { normal: { cached: 0, missed: 0, total: tc }, golden: { cached: 0, missed: 0, total: tc }, signature: { cached: 0, missed: 0, total: tc }, diamond: { cached: 0, missed: 0, total: tc } } })
               } catch {
@@ -291,53 +266,49 @@ export default function SettingsView() {
       </section>
 
       {!hostedMode && (
-        <>
-          {/* Cloudflare Status */}
-          <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
-            <h2 className="text-sm font-bold text-white mb-3">Cloudflare Clearance</h2>
-            <p className="text-xs text-gray-400 mb-3">
-              HSReplay uses Cloudflare protection. A valid clearance is required for collection sync and meta stats.
-            </p>
-            <div className="flex items-center gap-3 mb-3">
-              <div className={`w-2.5 h-2.5 rounded-full ${cfStatus?.valid ? 'bg-green-400' : 'bg-red-400'}`} />
-              <span className="text-sm text-gray-300">
-                {cfStatus === null
-                  ? 'Checking...'
-                  : cfStatus.valid
-                    ? `Active (expires in ${Math.round(cfStatus.expiresIn / 60)}m)`
-                    : 'Expired or not solved'}
-              </span>
-            </div>
-            <button
-              onClick={async () => {
-                setCfSolving(true)
-                try {
-                  const res = await fetch('/api/cf/solve', { method: 'POST' })
-                  const data = await res.json() as { success?: boolean; expiresIn?: number; error?: string }
-                  if (data.success) {
-                    setCfStatus({ valid: true, expiresIn: data.expiresIn ?? 1800 })
-                    setSyncResult({ success: true, message: 'Cloudflare challenge solved' })
-                  } else {
-                    setSyncResult({ success: false, message: data.error ?? 'Failed to solve Cloudflare challenge' })
-                  }
-                } catch {
-                  setSyncResult({ success: false, message: 'Failed to reach server for CF solve' })
-                } finally {
-                  setCfSolving(false)
+        <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
+          <h2 className="text-sm font-bold text-white mb-3">Cloudflare Clearance</h2>
+          <p className="text-xs text-gray-400 mb-3">
+            HSReplay uses Cloudflare protection. A valid clearance is required for collection sync and meta stats.
+          </p>
+          <div className="flex items-center gap-3 mb-3">
+            <div className={`w-2.5 h-2.5 rounded-full ${cfStatus?.valid ? 'bg-green-400' : 'bg-red-400'}`} />
+            <span className="text-sm text-gray-300">
+              {cfStatus === null
+                ? 'Checking...'
+                : cfStatus.valid
+                  ? `Active (expires in ${Math.round(cfStatus.expiresIn / 60)}m)`
+                  : 'Expired or not solved'}
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              setCfSolving(true)
+              try {
+                const res = await fetch('/api/cf/solve', { method: 'POST' })
+                const data = await res.json() as { success?: boolean; expiresIn?: number; error?: string }
+                if (data.success) {
+                  setCfStatus({ valid: true, expiresIn: data.expiresIn ?? 1800 })
+                  setSyncResult({ success: true, message: 'Cloudflare challenge solved' })
+                } else {
+                  setSyncResult({ success: false, message: data.error ?? 'Failed to solve Cloudflare challenge' })
                 }
-              }}
-              disabled={cfSolving}
-              className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
-                         hover:bg-white/15 transition-colors disabled:opacity-40"
-            >
-              {cfSolving ? 'Solving...' : 'Solve Cloudflare Challenge'}
-            </button>
-          </section>
-        </>
+              } catch {
+                setSyncResult({ success: false, message: 'Failed to reach server for CF solve' })
+              } finally {
+                setCfSolving(false)
+              }
+            }}
+            disabled={cfSolving}
+            className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm
+                       hover:bg-white/15 transition-colors disabled:opacity-40"
+          >
+            {cfSolving ? 'Solving...' : 'Solve Cloudflare Challenge'}
+          </button>
+        </section>
       )}
 
-      {/* General status */}
-      {syncResult && !syncLoading && !syncResult.message.includes('synced:') && (
+      {syncResult && !syncLoading && (
         <div
           className={`rounded-lg p-4 text-sm ${
             syncResult.success

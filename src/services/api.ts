@@ -62,6 +62,8 @@ export interface DataStatus {
   cardDb: { updatedAt: number };
   meta: { updatedAt: number };
   cf: { valid: boolean; expiresIn: number };
+  hostedMode?: boolean;
+  artVersion?: number;
 }
 
 export const api = {
@@ -77,7 +79,7 @@ export const api = {
   getDataStatus: () => fetchJson<DataStatus>('/data-status'),
 
   getCards: () => fetchJson<CardDb>('/cards'),
-  refreshCards: () => fetchJson<{ count: number }>('/cards/refresh', { method: 'POST' }),
+  refreshCards: () => fetchJson<{ count: number; artVersion?: number }>('/cards/refresh', { method: 'POST' }),
 
   getExpansions: () => fetchJson<Expansion[]>('/expansions'),
 
@@ -95,12 +97,10 @@ export const api = {
   getMeta: () => fetchJson<Record<string, unknown>>('/meta'),
   refreshMeta: () => fetchJson<{ count: number }>('/meta/refresh', { method: 'POST' }),
 
-  clearArtCache: () => fetchJson<{ queued: number; missCleared: number }>('/card-art/clear-cache', { method: 'POST' }),
+  clearArtCache: () => fetchJson<{ queued: number; missCleared: number; artVersion?: number }>('/card-art/clear-cache', { method: 'POST' }),
 
   getPrefetchStatus: () => fetchJson<{ running: boolean; variant: string; done: number; total: number }>('/prefetch-status'),
   getArtCacheStats: () => fetchJson<{ cached: number; missed: number; variants: Record<string, { cached: number; missed: number }> }>('/card-art/cache-stats'),
-  getVariantAvailability: () => fetchJson<{ signatureConfirmed: string[]; diamondConfirmed: string[] }>('/variant-availability'),
-
   getSnapshots: () => fetchJson<import('../types.ts').CollectionSnapshot[]>('/snapshots'),
   saveSnapshot: (snapshot: import('../types.ts').CollectionSnapshot) =>
     fetchJson<{ saved: boolean; count: number }>('/snapshots', {

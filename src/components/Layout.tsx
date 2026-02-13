@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Sidebar from './Sidebar.tsx'
 import { useStore } from '../stores/store.ts'
@@ -92,19 +92,33 @@ function Toasts() {
 function PrefetchBanner() {
   const [status, setStatus] = useState<{ running: boolean; variant: string; done: number; total: number } | null>(null)
   const [dismissed, setDismissed] = useState(false)
+  const stoppedRef = useRef(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    let cancelled = false
     async function poll() {
+      if (stoppedRef.current) return
       try {
         const s = await api.getPrefetchStatus()
-        if (!cancelled) setStatus(s)
-        if (s.running && !cancelled) setTimeout(poll, 3000)
+        if (stoppedRef.current) return
+        setStatus(s)
+        if (s.running && !stoppedRef.current) {
+          timerRef.current = setTimeout(poll, 3000)
+        }
       } catch { /* ignore */ }
     }
     poll()
-    return () => { cancelled = true }
+    return () => {
+      stoppedRef.current = true
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
   }, [])
+
+  function handleDismiss() {
+    stoppedRef.current = true
+    setDismissed(true)
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+  }
 
   if (dismissed || !status?.running) return null
   const pct = status.total > 0 ? Math.round(status.done / status.total * 100) : 0
@@ -116,7 +130,7 @@ function PrefetchBanner() {
         <div className="h-full bg-blue-400/60 rounded-full transition-all" style={{ width: `${pct}%` }} />
       </div>
       <span className="text-blue-400/60">{status.done}/{status.total}</span>
-      <button onClick={() => setDismissed(true)} className="text-blue-400/40 hover:text-blue-300 ml-1">
+      <button onClick={handleDismiss} className="text-blue-400/40 hover:text-blue-300 ml-1">
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
