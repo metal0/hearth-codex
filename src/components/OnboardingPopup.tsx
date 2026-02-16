@@ -85,29 +85,6 @@ export default function OnboardingPopup({ onComplete }: Props) {
           Track your Hearthstone collection, calculate pack costs, and optimize your crafting strategy.
         </p>
 
-        <div className="flex gap-1 mb-6 bg-white/5 rounded-lg p-1">
-          <button
-            onClick={() => { setTab('collection'); setError(''); setSessionRequired(null) }}
-            className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-              tab === 'collection'
-                ? 'bg-gold/20 text-gold border border-gold/30'
-                : 'text-gray-400 hover:text-gray-300'
-            }`}
-          >
-            Collection URL
-          </button>
-          <button
-            onClick={() => { setTab('session'); setError('') }}
-            className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
-              tab === 'session'
-                ? 'bg-gold/20 text-gold border border-gold/30'
-                : 'text-gray-400 hover:text-gray-300'
-            }`}
-          >
-            Session ID
-          </button>
-        </div>
-
         {tab === 'collection' && (
           <>
             <div className="space-y-4 mb-6">
@@ -232,6 +209,7 @@ export default function OnboardingPopup({ onComplete }: Props) {
 
               <p className="text-[11px] text-gray-600 text-center">
                 Enables persistent settings, collection history, and premium stats.
+                Your session ID, battletag, and settings will be stored server-side.
               </p>
             </div>
           </>

@@ -79,17 +79,19 @@ export default function App() {
         useStore.getState().fetchBrackets(),
       ])
 
-      const { collection, syncCollection, addToast } = useStore.getState()
-      const syncedAt = collection?.syncedAt
-      const isStale = !syncedAt || (Date.now() - syncedAt > TWO_HOURS)
-      if (!isStale) return
+      if (authTier === 'full') {
+        const { collection, syncCollection, addToast } = useStore.getState()
+        const syncedAt = collection?.syncedAt
+        const isStale = !syncedAt || (Date.now() - syncedAt > TWO_HOURS)
+        if (!isStale) return
 
-      try {
-        const result = await syncCollection()
-        if (result.success) {
-          addToast(`Collection synced: ${result.cards?.toLocaleString()} cards, ${result.dust?.toLocaleString()} dust`, 'success')
-        }
-      } catch { /* network error — banner will show */ }
+        try {
+          const result = await syncCollection()
+          if (result.success) {
+            addToast(`Collection synced: ${result.cards?.toLocaleString()} cards, ${result.dust?.toLocaleString()} dust`, 'success')
+          }
+        } catch { /* network error — banner will show */ }
+      }
     }
 
     init()

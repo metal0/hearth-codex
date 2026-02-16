@@ -1,3 +1,10 @@
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+});
+
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -446,6 +453,9 @@ app.post('/api/auth/collection-login', async (req, res) => {
 });
 
 const publicSyncCooldowns = new Map<string, number>();
+const publicSyncIpCooldowns = new Map<string, number>();
+const PUBLIC_SYNC_COOLDOWN = 30 * 60 * 1000;
+const PUBLIC_SYNC_IP_COOLDOWN = 10 * 60 * 1000;
 
 app.post('/api/collection/public-sync', async (req, res) => {
   const region = req.body?.region as number | undefined;
@@ -455,11 +465,19 @@ app.post('/api/collection/public-sync', async (req, res) => {
     return;
   }
 
+  const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+  const ipLastSync = publicSyncIpCooldowns.get(ip) ?? 0;
+  if (Date.now() - ipLastSync < PUBLIC_SYNC_IP_COOLDOWN) {
+    const remaining = Math.ceil((PUBLIC_SYNC_IP_COOLDOWN - (Date.now() - ipLastSync)) / 1000);
+    res.status(429).json({ error: `Rate limited: try again in ${remaining}s` });
+    return;
+  }
+
   const cooldownKey = `${region}:${accountLo}`;
   const lastSync = publicSyncCooldowns.get(cooldownKey) ?? 0;
-  if (Date.now() - lastSync < SYNC_COOLDOWN) {
-    const remaining = Math.ceil((SYNC_COOLDOWN - (Date.now() - lastSync)) / 1000);
-    res.status(429).json({ error: `Sync cooldown: try again in ${remaining}s` });
+  if (Date.now() - lastSync < PUBLIC_SYNC_COOLDOWN) {
+    const remaining = Math.ceil((PUBLIC_SYNC_COOLDOWN - (Date.now() - lastSync)) / 1000);
+    res.status(429).json({ error: `Sync cooldown: try again in ${Math.ceil(remaining / 60)}m` });
     return;
   }
 
@@ -467,6 +485,7 @@ app.post('/api/collection/public-sync', async (req, res) => {
     const { collection, dust } = await fetchPublicCollection(region, accountLo);
     const syncedAt = Date.now();
     publicSyncCooldowns.set(cooldownKey, syncedAt);
+    publicSyncIpCooldowns.set(ip, syncedAt);
     res.json({
       success: true,
       collection,
