@@ -163,6 +163,7 @@ export const api = {
     }),
 
   getMe: () => fetchJson<AuthMe>('/auth/me'),
+  deleteAccount: () => fetchJson<{ success: boolean }>('/auth/account', { method: 'DELETE' }),
 
   getDataStatus: () => fetchJson<DataStatus>('/data-status'),
 

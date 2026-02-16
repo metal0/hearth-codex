@@ -33,6 +33,9 @@ export default function SettingsView() {
   const [cfStatus, setCfStatus] = useState<{ valid: boolean; expiresIn: number } | null>(null)
   const [cfSolving, setCfSolving] = useState(false)
   const [cacheStats, setCacheStats] = useState<{ cached: number; missed: number; totalCards: number; variants: Record<string, { cached: number; missed: number; total: number }> } | null>(null)
+  const [deleteStep, setDeleteStep] = useState(0)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const logout = useStore(s => s.logout)
 
   const availableKeys = new Set(availableBrackets.map(b => b.key))
 
@@ -237,13 +240,21 @@ export default function SettingsView() {
       {battletag && (
         <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
           <h2 className="text-sm font-bold text-white mb-3">Account</h2>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-300">{battletag}</span>
-            {isPremium && (
-              <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded">
-                Premium
-              </span>
-            )}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-300">{battletag}</span>
+              {isPremium && (
+                <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded">
+                  Premium
+                </span>
+              )}
+            </div>
+            <button
+              onClick={logout}
+              className="px-3 py-1.5 text-xs text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+            >
+              Log out
+            </button>
           </div>
           {isPremium && hostedMode && authTier === 'full' && (
             <div className="mt-4 pt-4 border-t border-white/5">
@@ -466,6 +477,84 @@ export default function SettingsView() {
           >
             {cfSolving ? 'Solving...' : 'Solve Cloudflare Challenge'}
           </button>
+        </section>
+      )}
+
+      {hostedMode && authTier === 'full' && (
+        <section className="bg-red-950/30 rounded-lg border border-red-500/20 p-5 mb-6">
+          <h2 className="text-sm font-bold text-red-400 mb-2">Danger Zone</h2>
+          {deleteStep === 0 && (
+            <>
+              <p className="text-xs text-gray-400 mb-3">
+                Permanently delete your account and all associated data from the server.
+              </p>
+              <button
+                onClick={() => setDeleteStep(1)}
+                className="px-4 py-2 text-sm text-red-400 border border-red-500/30 rounded
+                           hover:bg-red-500/10 transition-colors"
+              >
+                Delete Account
+              </button>
+            </>
+          )}
+          {deleteStep === 1 && (
+            <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-4">
+              <p className="text-sm text-red-300 mb-3">
+                This will permanently delete your account, all settings, collection history,
+                and snapshots. This action <strong>cannot be undone</strong>.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setDeleteStep(0)}
+                  className="px-4 py-2 text-sm text-gray-400 bg-white/5 rounded hover:bg-white/10 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => setDeleteStep(2)}
+                  className="px-4 py-2 text-sm text-red-400 border border-red-500/40 rounded
+                             hover:bg-red-500/20 transition-colors"
+                >
+                  I understand, continue
+                </button>
+              </div>
+            </div>
+          )}
+          {deleteStep === 2 && (
+            <div className="bg-red-900/30 border border-red-500/40 rounded-lg p-4">
+              <p className="text-sm text-red-200 font-medium mb-3">
+                Are you absolutely sure? All data for <strong>{battletag}</strong> will be
+                permanently erased from the server and this browser.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setDeleteStep(0)}
+                  className="px-4 py-2 text-sm text-gray-400 bg-white/5 rounded hover:bg-white/10 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    setDeleteLoading(true)
+                    try {
+                      await api.deleteAccount()
+                      logout()
+                    } catch (err: unknown) {
+                      setSyncResult({ success: false, message: err instanceof Error ? err.message : 'Failed to delete account' })
+                      setDeleteStep(0)
+                    } finally {
+                      setDeleteLoading(false)
+                    }
+                  }}
+                  disabled={deleteLoading}
+                  className="px-4 py-2 text-sm font-bold text-white bg-red-600 rounded
+                             hover:bg-red-500 transition-colors disabled:opacity-40"
+                >
+                  {deleteLoading ? 'Deleting...' : 'Delete my account permanently'}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       )}
 

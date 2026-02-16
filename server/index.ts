@@ -11,8 +11,8 @@ import {
   getAllExpansions,
   type CardDb,
 } from './data.ts';
-import { ensureCfReady, fetchThroughBrowser, fetchThroughBrowserPublic, setSessionCookie, clearSessionCookie, getCfStatus, clearCfSession, acquireSessionLock } from './cloudflare.ts';
-import { initAuth, resolveUserByToken, createUser, updateSessionId, getAllUsers, purgeInactiveUsers, type TokenData } from './auth.ts';
+import { ensureCfReady, fetchThroughBrowser, fetchThroughBrowserPublic, setSessionCookie, clearSessionCookie, getCfStatus, clearCfSession, acquireSessionLock, fetchWithoutSession } from './cloudflare.ts';
+import { initAuth, resolveUserByToken, createUser, updateSessionId, getAllUsers, purgeInactiveUsers, findUserByAccount, deleteUser, type TokenData } from './auth.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -386,22 +386,49 @@ app.post('/api/auth/collection-login', async (req, res) => {
     return;
   }
 
-  try {
-    const { collection, dust } = await fetchPublicCollection(parsed.region, parsed.accountLo);
-    const cards = Object.keys(collection).length;
+  const existingUser = findUserByAccount(parsed.accountLo);
+  if (existingUser) {
+    res.status(403).json({
+      error: `This account (${existingUser.tokenData.battletag}) is registered with a session ID. Please use the Session ID login instead.`,
+      requiresSessionId: true,
+      battletag: existingUser.tokenData.battletag,
+    });
+    return;
+  }
 
+  try {
+    await ensureCfReady();
+    const release = await acquireSessionLock();
+    let collectionResult: { collection: Record<string, number[]>; dust: number };
     let battletag = `Player#${parsed.accountLo}`;
     try {
-      const pageResult = await fetchThroughBrowserPublic(`https://hsreplay.net/collection/${parsed.region}/${parsed.accountLo}/`);
-      if (pageResult.status === 200) {
-        const titleMatch = pageResult.body.match(/<title>([^<]+)<\/title>/);
-        if (titleMatch) {
-          const decoded = titleMatch[1].replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
-          const cleaned = decoded.replace(/'s [Cc]ollection.*$/, '').replace(/ - HSReplay\.net$/, '').trim();
-          if (cleaned && cleaned !== 'HSReplay.net') battletag = cleaned;
-        }
+      const collUrl = `https://hsreplay.net/api/v1/collection/?account_lo=${parsed.accountLo}&region=${parsed.region}`;
+      const collResp = await fetchWithoutSession(collUrl);
+      if (collResp.status === 401 || collResp.status === 403) {
+        throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
       }
-    } catch {}
+      if (collResp.status !== 200) {
+        throw new Error(`HSReplay returned ${collResp.status}`);
+      }
+      const data = JSON.parse(collResp.body);
+      collectionResult = { collection: data.collection ?? {}, dust: data.dust ?? 0 };
+
+      try {
+        const pageResp = await fetchWithoutSession(`https://hsreplay.net/collection/${parsed.region}/${parsed.accountLo}/`);
+        if (pageResp.status === 200) {
+          const titleMatch = pageResp.body.match(/<title>([^<]+)<\/title>/);
+          if (titleMatch) {
+            const decoded = titleMatch[1].replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+            const cleaned = decoded.replace(/'s [Cc]ollection.*$/, '').replace(/ - HSReplay\.net$/, '').trim();
+            if (cleaned && cleaned !== 'HSReplay.net') battletag = cleaned;
+          }
+        }
+      } catch {}
+    } finally {
+      release();
+    }
+    const { collection, dust } = collectionResult;
+    const cards = Object.keys(collection).length;
 
     res.json({
       success: true,
@@ -547,6 +574,14 @@ app.get('/api/auth/me', authenticateUser, (req: AuthRequest, res) => {
     isPremium: settings.isPremium ?? null,
     premiumConsent: settings.premiumConsent ?? false,
   });
+});
+
+app.delete('/api/auth/account', authenticateUser, (req: AuthRequest, res) => {
+  if (!HOSTED_MODE) { res.status(403).json({ error: 'Account deletion is only available in hosted mode' }); return; }
+  const deleted = deleteUser(req.userId!);
+  if (!deleted) { res.status(404).json({ error: 'User not found' }); return; }
+  console.log(`[Auth] User ${req.userId} deleted their account`);
+  res.json({ success: true });
 });
 
 app.get('/api/data-status', (_req, res) => {

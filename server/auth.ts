@@ -131,6 +131,14 @@ export function getActiveUsers(withinMs: number): ResolvedUser[] {
   return active;
 }
 
+export function deleteUser(accountLo: string): boolean {
+  const user = findUserByAccount(accountLo);
+  if (!user) return false;
+  tokenCache.delete(user.tokenData.token);
+  try { rmSync(user.userDir, { recursive: true }); } catch {}
+  return true;
+}
+
 export function updateSessionId(accountLo: string, sessionId: string): void {
   const user = findUserByAccount(accountLo);
   if (!user) return;

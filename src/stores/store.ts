@@ -173,11 +173,7 @@ export const useStore = create<AppState>((set, get) => ({
   hostedMode: false,
   setHostedMode: (hosted) => set({ hostedMode: hosted }),
   logout: () => {
-    if (get().authTier === 'full') {
-      clearStoredToken();
-    } else {
-      clearCollectionOnlyData();
-    }
+    try { localStorage.clear(); } catch {}
     window.location.reload();
   },
 

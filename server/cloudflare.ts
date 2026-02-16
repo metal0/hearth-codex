@@ -3,9 +3,12 @@ import type { Browser, Page } from 'puppeteer';
 const CF_SOLVE_TIMEOUT_MS = 60_000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
+const CF_RENEW_MARGIN_MS = 5 * 60 * 1000;
+
 let browser: Browser | null = null;
 let page: Page | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let renewTimer: ReturnType<typeof setTimeout> | null = null;
 let cfReady = false;
 let solving = false;
 let solvePromise: Promise<boolean> | null = null;
@@ -33,6 +36,7 @@ function resetIdleTimer() {
 
 async function closeBrowser() {
   cfReady = false;
+  if (renewTimer) { clearTimeout(renewTimer); renewTimer = null; }
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (page) {
     try { await page.close(); } catch {}
@@ -79,6 +83,19 @@ async function ensureBrowser(): Promise<Page> {
   return page;
 }
 
+function scheduleRenewal() {
+  if (renewTimer) clearTimeout(renewTimer);
+  const delay = Math.max(0, (expiresAt - CF_RENEW_MARGIN_MS) - Date.now());
+  console.log(`[CF] Renewal scheduled in ${Math.round(delay / 60000)}m`);
+  renewTimer = setTimeout(() => {
+    renewTimer = null;
+    console.log('[CF] Auto-renewing CF clearance...');
+    ensureCfReady().catch(err => {
+      console.error('[CF] Auto-renewal failed:', err instanceof Error ? err.message : err);
+    });
+  }, delay);
+}
+
 async function solveCfChallenge(): Promise<boolean> {
   console.log('[CF] Solving Cloudflare challenge...');
   const p = await ensureBrowser();
@@ -98,6 +115,7 @@ async function solveCfChallenge(): Promise<boolean> {
         cfReady = true;
         console.log(`[CF] Challenge solved! Expires in ${Math.round((expiresAt - Date.now()) / 60000)}m`);
         resetIdleTimer();
+        scheduleRenewal();
         return true;
       }
 
@@ -113,6 +131,7 @@ async function solveCfChallenge(): Promise<boolean> {
         cfReady = true;
         console.log('[CF] No challenge detected, proceeding without cf_clearance');
         resetIdleTimer();
+        scheduleRenewal();
         return true;
       }
 
@@ -184,15 +203,19 @@ async function evaluateFetch(p: Page, url: string): Promise<{ status: number; bo
   }, url);
 }
 
+export async function fetchWithoutSession(url: string): Promise<{ status: number; body: string }> {
+  const p = await ensureBrowser();
+  await p.deleteCookie({ name: 'sessionid', domain: '.hsreplay.net' });
+  return evaluateFetch(p, url);
+}
+
 export async function fetchThroughBrowserPublic(url: string): Promise<{ status: number; body: string }> {
   await ensureCfReady();
   resetIdleTimer();
 
   const release = await acquireSessionLock();
   try {
-    const p = await ensureBrowser();
-    await p.deleteCookie({ name: 'sessionid', domain: '.hsreplay.net' });
-    return await evaluateFetch(p, url);
+    return await fetchWithoutSession(url);
   } finally {
     release();
   }
