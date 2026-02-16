@@ -270,9 +270,15 @@ if (HOSTED_MODE) {
 
   const HOSTED_BLOCKED = new Set(['/cards/refresh', '/card-art/clear-cache', '/cf/solve', '/meta/refresh']);
   const AUTH_EXEMPT = new Set(['/auth/register', '/auth/collection-login', '/collection/public-sync', '/health']);
+  const PUBLIC_PATHS = new Set(['/data-status', '/cards', '/expansions', '/meta', '/meta/brackets', '/cf/status', '/card-art/cache-stats']);
+  const PUBLIC_PREFIXES = ['/decks', '/card-art/'];
+  function isPublicPath(path: string): boolean {
+    if (PUBLIC_PATHS.has(path)) return true;
+    return PUBLIC_PREFIXES.some(p => path.startsWith(p));
+  }
   app.use('/api', (req: AuthRequest, res, next) => {
     if (HOSTED_BLOCKED.has(req.path)) { res.status(403).json({ error: 'This action is disabled in hosted mode' }); return; }
-    if (AUTH_EXEMPT.has(req.path)) { next(); return; }
+    if (AUTH_EXEMPT.has(req.path) || isPublicPath(req.path)) { next(); return; }
     const token = req.headers['x-user-token'] as string | undefined;
     if (!token) { res.status(401).json({ error: 'Authentication required' }); return; }
     const user = resolveUserByToken(token);
