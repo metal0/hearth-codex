@@ -2,12 +2,10 @@ import type { Browser, Page } from 'puppeteer';
 
 const CF_SOLVE_TIMEOUT_MS = 60_000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_FETCHES_BEFORE_RECYCLE = 30;
 
 let browser: Browser | null = null;
 let page: Page | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
-let fetchCount = 0;
 let cfReady = false;
 let solving = false;
 let solvePromise: Promise<boolean> | null = null;
@@ -44,7 +42,6 @@ async function closeBrowser() {
     try { await browser.close(); } catch {}
     browser = null;
   }
-  fetchCount = 0;
 }
 
 async function ensureBrowser(): Promise<Page> {
@@ -169,55 +166,8 @@ export async function setSessionCookie(sessionId: string): Promise<void> {
   });
 }
 
-export async function fetchThroughBrowserPublic(url: string): Promise<{ status: number; body: string }> {
-  await ensureCfReady();
-  resetIdleTimer();
-
-  const release = await acquireSessionLock();
-  try {
-    const p = await ensureBrowser();
-    await p.deleteCookie({ name: 'sessionid', domain: '.hsreplay.net' });
-
-    const result = await p.evaluate(async (fetchUrl: string) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 60_000);
-      try {
-        const res = await fetch(fetchUrl, {
-          credentials: 'include',
-          headers: { 'Accept': 'application/json' },
-          signal: controller.signal,
-        });
-        const text = await res.text();
-        return { status: res.status, body: text };
-      } finally {
-        clearTimeout(timer);
-      }
-    }, url);
-
-    fetchCount++;
-    if (fetchCount >= MAX_FETCHES_BEFORE_RECYCLE) {
-      console.log(`[CF] Recycling browser after ${fetchCount} fetches to reclaim memory`);
-      const cookies = await p.cookies();
-      await closeBrowser();
-      const newPage = await ensureBrowser();
-      if (cookies.length > 0) await newPage.setCookie(...cookies);
-      cfReady = true;
-      resetIdleTimer();
-    }
-
-    return result;
-  } finally {
-    release();
-  }
-}
-
-export async function fetchThroughBrowser(url: string): Promise<{ status: number; body: string }> {
-  await ensureCfReady();
-  resetIdleTimer();
-
-  const p = await ensureBrowser();
-
-  const result = await p.evaluate(async (fetchUrl: string) => {
+async function evaluateFetch(p: Page, url: string): Promise<{ status: number; body: string }> {
+  return p.evaluate(async (fetchUrl: string) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60_000);
     try {
@@ -232,19 +182,28 @@ export async function fetchThroughBrowser(url: string): Promise<{ status: number
       clearTimeout(timer);
     }
   }, url);
+}
 
-  fetchCount++;
-  if (fetchCount >= MAX_FETCHES_BEFORE_RECYCLE) {
-    console.log(`[CF] Recycling browser after ${fetchCount} fetches to reclaim memory`);
-    const cookies = await p.cookies();
-    await closeBrowser();
-    const newPage = await ensureBrowser();
-    if (cookies.length > 0) await newPage.setCookie(...cookies);
-    cfReady = true;
-    resetIdleTimer();
+export async function fetchThroughBrowserPublic(url: string): Promise<{ status: number; body: string }> {
+  await ensureCfReady();
+  resetIdleTimer();
+
+  const release = await acquireSessionLock();
+  try {
+    const p = await ensureBrowser();
+    await p.deleteCookie({ name: 'sessionid', domain: '.hsreplay.net' });
+    return await evaluateFetch(p, url);
+  } finally {
+    release();
   }
+}
 
-  return result;
+export async function fetchThroughBrowser(url: string): Promise<{ status: number; body: string }> {
+  await ensureCfReady();
+  resetIdleTimer();
+
+  const p = await ensureBrowser();
+  return evaluateFetch(p, url);
 }
 
 export function getCfStatus(): { valid: boolean; expiresIn: number } {
