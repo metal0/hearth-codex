@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   api, setAuthTier, setCollectionMeta, setLocalCollection, clearStoredToken,
 } from '../services/api.ts'
+import { useStore } from '../stores/store.ts'
 
 interface Props {
   onComplete: () => void
@@ -24,6 +25,7 @@ export default function OnboardingPopup({ onComplete }: Props) {
       if (result.success) {
         clearStoredToken()
         setAuthTier('collection')
+        useStore.setState({ authTier: 'collection' })
         setCollectionMeta({
           accountLo: result.accountLo,
           region: result.region,
