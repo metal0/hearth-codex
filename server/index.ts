@@ -357,15 +357,24 @@ async function fetchPublicCollection(region: number, accountLo: string): Promise
     await clearSessionCookie();
     await ensureCfReady();
     const url = `https://hsreplay.net/api/v1/collection/?account_lo=${accountLo}&region=${region}`;
-    const result = await fetchThroughBrowser(url);
-    if (result.status === 401 || result.status === 403) {
-      throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
+    const MAX_RETRIES = 3;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const result = await fetchThroughBrowser(url);
+      if (result.status === 401 || result.status === 403) {
+        throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
+      }
+      if (result.status >= 500 && attempt < MAX_RETRIES) {
+        console.log(`[Collection] HSReplay returned ${result.status}, retrying (${attempt}/${MAX_RETRIES})...`);
+        await new Promise(r => setTimeout(r, 3000 * attempt));
+        continue;
+      }
+      if (result.status !== 200) {
+        throw new Error(`HSReplay returned ${result.status}`);
+      }
+      const data = JSON.parse(result.body);
+      return { collection: data.collection ?? {}, dust: data.dust ?? 0 };
     }
-    if (result.status !== 200) {
-      throw new Error(`HSReplay returned ${result.status}`);
-    }
-    const data = JSON.parse(result.body);
-    return { collection: data.collection ?? {}, dust: data.dust ?? 0 };
+    throw new Error('HSReplay is not responding. Please try again later.');
   } finally {
     release();
   }

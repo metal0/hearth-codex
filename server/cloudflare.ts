@@ -61,6 +61,7 @@ async function ensureBrowser(): Promise<Page> {
   console.log('[CF] Launching browser...');
   browser = await puppeteer.launch({
     headless: 'new' as never,
+    protocolTimeout: 300_000,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -159,12 +160,19 @@ export async function fetchThroughBrowser(url: string): Promise<{ status: number
   const p = await ensureBrowser();
 
   const result = await p.evaluate(async (fetchUrl: string) => {
-    const res = await fetch(fetchUrl, {
-      credentials: 'include',
-      headers: { 'Accept': 'application/json' },
-    });
-    const text = await res.text();
-    return { status: res.status, body: text };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const res = await fetch(fetchUrl, {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      return { status: res.status, body: text };
+    } finally {
+      clearTimeout(timer);
+    }
   }, url);
 
   fetchCount++;
