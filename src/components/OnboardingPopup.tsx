@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import {
-  api, setAuthTier, setCollectionMeta, setLocalCollection,
+  api, setAuthTier, setCollectionMeta, setLocalCollection, clearStoredToken,
 } from '../services/api.ts'
 
 interface Props {
@@ -22,6 +22,7 @@ export default function OnboardingPopup({ onComplete }: Props) {
     try {
       const result = await api.collectionLogin(trimmed)
       if (result.success) {
+        clearStoredToken()
         setAuthTier('collection')
         setCollectionMeta({
           accountLo: result.accountLo,
