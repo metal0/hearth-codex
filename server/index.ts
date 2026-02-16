@@ -1863,7 +1863,7 @@ app.get('/api/card-art/:cardId/:variant', async (req, res) => {
 
 const prefetchProgress = { running: false, variant: '', done: 0, total: 0 };
 
-app.get('/api/prefetch-status', (_req, res) => {
+app.get('/api/prefetch-status', authenticateUser, (_req, res) => {
   res.json(prefetchProgress);
 });
 

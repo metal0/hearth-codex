@@ -94,8 +94,10 @@ function PrefetchBanner() {
   const [dismissed, setDismissed] = useState(false)
   const stoppedRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const authTier = useStore(s => s.authTier)
 
   useEffect(() => {
+    if (authTier !== 'full') return
     async function poll() {
       if (stoppedRef.current) return
       try {
@@ -112,7 +114,7 @@ function PrefetchBanner() {
       stoppedRef.current = true
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [])
+  }, [authTier])
 
   function handleDismiss() {
     stoppedRef.current = true
