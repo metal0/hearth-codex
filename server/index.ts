@@ -11,7 +11,7 @@ import {
   getAllExpansions,
   type CardDb,
 } from './data.ts';
-import { ensureCfReady, fetchThroughBrowser, setSessionCookie, clearSessionCookie, getCfStatus, clearCfSession, acquireSessionLock } from './cloudflare.ts';
+import { ensureCfReady, fetchThroughBrowser, fetchThroughBrowserPublic, setSessionCookie, clearSessionCookie, getCfStatus, clearCfSession, acquireSessionLock } from './cloudflare.ts';
 import { initAuth, resolveUserByToken, createUser, updateSessionId, getAllUsers, purgeInactiveUsers, type TokenData } from './auth.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -352,32 +352,25 @@ function parseCollectionUrl(url: string): { region: number; accountLo: string } 
 }
 
 async function fetchPublicCollection(region: number, accountLo: string): Promise<{ collection: Record<string, number[]>; dust: number }> {
-  const release = await acquireSessionLock();
-  try {
-    await clearSessionCookie();
-    await ensureCfReady();
-    const url = `https://hsreplay.net/api/v1/collection/?account_lo=${accountLo}&region=${region}`;
-    const MAX_RETRIES = 3;
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const result = await fetchThroughBrowser(url);
-      if (result.status === 401 || result.status === 403) {
-        throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
-      }
-      if (result.status >= 500 && attempt < MAX_RETRIES) {
-        console.log(`[Collection] HSReplay returned ${result.status}, retrying (${attempt}/${MAX_RETRIES})...`);
-        await new Promise(r => setTimeout(r, 3000 * attempt));
-        continue;
-      }
-      if (result.status !== 200) {
-        throw new Error(`HSReplay returned ${result.status}`);
-      }
-      const data = JSON.parse(result.body);
-      return { collection: data.collection ?? {}, dust: data.dust ?? 0 };
+  const url = `https://hsreplay.net/api/v1/collection/?account_lo=${accountLo}&region=${region}`;
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const result = await fetchThroughBrowserPublic(url);
+    if (result.status === 401 || result.status === 403) {
+      throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
     }
-    throw new Error('HSReplay is not responding. Please try again later.');
-  } finally {
-    release();
+    if (result.status >= 500 && attempt < MAX_RETRIES) {
+      console.log(`[Collection] HSReplay returned ${result.status}, retrying (${attempt}/${MAX_RETRIES})...`);
+      await new Promise(r => setTimeout(r, 3000 * attempt));
+      continue;
+    }
+    if (result.status !== 200) {
+      throw new Error(`HSReplay returned ${result.status}`);
+    }
+    const data = JSON.parse(result.body);
+    return { collection: data.collection ?? {}, dust: data.dust ?? 0 };
   }
+  throw new Error('HSReplay is not responding. Please try again later.');
 }
 
 app.post('/api/auth/collection-login', async (req, res) => {
@@ -399,21 +392,14 @@ app.post('/api/auth/collection-login', async (req, res) => {
 
     let battletag = `Player#${parsed.accountLo}`;
     try {
-      const release = await acquireSessionLock();
-      try {
-        await clearSessionCookie();
-        await ensureCfReady();
-        const pageResult = await fetchThroughBrowser(`https://hsreplay.net/collection/${parsed.region}/${parsed.accountLo}/`);
-        if (pageResult.status === 200) {
-          const titleMatch = pageResult.body.match(/<title>([^<]+)<\/title>/);
-          if (titleMatch) {
-            const decoded = titleMatch[1].replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
-            const cleaned = decoded.replace(/'s [Cc]ollection.*$/, '').replace(/ - HSReplay\.net$/, '').trim();
-            if (cleaned && cleaned !== 'HSReplay.net') battletag = cleaned;
-          }
+      const pageResult = await fetchThroughBrowserPublic(`https://hsreplay.net/collection/${parsed.region}/${parsed.accountLo}/`);
+      if (pageResult.status === 200) {
+        const titleMatch = pageResult.body.match(/<title>([^<]+)<\/title>/);
+        if (titleMatch) {
+          const decoded = titleMatch[1].replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+          const cleaned = decoded.replace(/'s [Cc]ollection.*$/, '').replace(/ - HSReplay\.net$/, '').trim();
+          if (cleaned && cleaned !== 'HSReplay.net') battletag = cleaned;
         }
-      } finally {
-        release();
       }
     } catch {}
 

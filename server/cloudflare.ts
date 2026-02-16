@@ -169,6 +169,42 @@ export async function setSessionCookie(sessionId: string): Promise<void> {
   });
 }
 
+export async function fetchThroughBrowserPublic(url: string): Promise<{ status: number; body: string }> {
+  await ensureCfReady();
+  resetIdleTimer();
+
+  const p = await ensureBrowser();
+
+  const result = await p.evaluate(async (fetchUrl: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const res = await fetch(fetchUrl, {
+        credentials: 'omit',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      return { status: res.status, body: text };
+    } finally {
+      clearTimeout(timer);
+    }
+  }, url);
+
+  fetchCount++;
+  if (fetchCount >= MAX_FETCHES_BEFORE_RECYCLE) {
+    console.log(`[CF] Recycling browser after ${fetchCount} fetches to reclaim memory`);
+    const cookies = await p.cookies();
+    await closeBrowser();
+    const newPage = await ensureBrowser();
+    if (cookies.length > 0) await newPage.setCookie(...cookies);
+    cfReady = true;
+    resetIdleTimer();
+  }
+
+  return result;
+}
+
 export async function fetchThroughBrowser(url: string): Promise<{ status: number; body: string }> {
   await ensureCfReady();
   resetIdleTimer();
