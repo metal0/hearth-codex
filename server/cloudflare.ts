@@ -2,10 +2,12 @@ import type { Browser, Page } from 'puppeteer';
 
 const CF_SOLVE_TIMEOUT_MS = 60_000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_FETCHES_BEFORE_RECYCLE = 30;
 
 let browser: Browser | null = null;
 let page: Page | null = null;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let fetchCount = 0;
 let cfReady = false;
 let solving = false;
 let solvePromise: Promise<boolean> | null = null;
@@ -33,11 +35,16 @@ function resetIdleTimer() {
 
 async function closeBrowser() {
   cfReady = false;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (page) {
+    try { await page.close(); } catch {}
+    page = null;
+  }
   if (browser) {
     try { await browser.close(); } catch {}
     browser = null;
-    page = null;
   }
+  fetchCount = 0;
 }
 
 async function ensureBrowser(): Promise<Page> {
@@ -58,6 +65,14 @@ async function ensureBrowser(): Promise<Page> {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-translate',
+      '--no-first-run',
+      '--js-flags=--max-old-space-size=128',
     ],
   });
 
@@ -111,6 +126,20 @@ export async function ensureCfReady(): Promise<boolean> {
   return solvePromise;
 }
 
+let sessionLockQueue: Promise<void> = Promise.resolve();
+
+export function acquireSessionLock(): Promise<() => void> {
+  let release: () => void;
+  const prev = sessionLockQueue;
+  sessionLockQueue = new Promise(resolve => { release = resolve; });
+  return prev.then(() => release!);
+}
+
+export async function clearSessionCookie(): Promise<void> {
+  const p = await ensureBrowser();
+  await p.deleteCookie({ name: 'sessionid', domain: '.hsreplay.net' });
+}
+
 export async function setSessionCookie(sessionId: string): Promise<void> {
   const p = await ensureBrowser();
   await p.setCookie({
@@ -137,6 +166,17 @@ export async function fetchThroughBrowser(url: string): Promise<{ status: number
     const text = await res.text();
     return { status: res.status, body: text };
   }, url);
+
+  fetchCount++;
+  if (fetchCount >= MAX_FETCHES_BEFORE_RECYCLE) {
+    console.log(`[CF] Recycling browser after ${fetchCount} fetches to reclaim memory`);
+    const cookies = await p.cookies();
+    await closeBrowser();
+    const newPage = await ensureBrowser();
+    if (cookies.length > 0) await newPage.setCookie(...cookies);
+    cfReady = true;
+    resetIdleTimer();
+  }
 
   return result;
 }

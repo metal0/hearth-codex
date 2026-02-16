@@ -1,15 +1,29 @@
 import { useState, useEffect } from 'react'
 import { useStore } from '../stores/store.ts'
-import { api } from '../services/api.ts'
+import { api, setStoredToken, setStoredAccountId, setAuthTier } from '../services/api.ts'
+import { FREE_BRACKET, bracketLabel } from '../types.ts'
+import { Dropdown } from '../components/FilterBar.tsx'
 
 export default function SettingsView() {
+  const authTier = useStore(s => s.authTier)
   const syncCollection = useStore(s => s.syncCollection)
   const syncLoading = useStore(s => s.syncLoading)
   const fetchCards = useStore(s => s.fetchCards)
   const fetchMeta = useStore(s => s.fetchMeta)
   const addToast = useStore(s => s.addToast)
   const hostedMode = useStore(s => s.hostedMode)
+  const battletag = useStore(s => s.battletag)
+  const isPremium = useStore(s => s.isPremium)
+  const premiumConsent = useStore(s => s.premiumConsent)
+  const metaBracket = useStore(s => s.metaBracket)
+  const availableBrackets = useStore(s => s.availableBrackets)
+  const setMetaBracket = useStore(s => s.setMetaBracket)
+  const fetchBrackets = useStore(s => s.fetchBrackets)
+  const setPremiumConsent = useStore(s => s.setPremiumConsent)
 
+  const [upgradeInput, setUpgradeInput] = useState('')
+  const [upgradeLoading, setUpgradeLoading] = useState(false)
+  const [upgradeError, setUpgradeError] = useState('')
   const [sessionInput, setSessionInput] = useState('')
   const [showReauth, setShowReauth] = useState(false)
   const [reauthLoading, setReauthLoading] = useState(false)
@@ -20,11 +34,23 @@ export default function SettingsView() {
   const [cfSolving, setCfSolving] = useState(false)
   const [cacheStats, setCacheStats] = useState<{ cached: number; missed: number; totalCards: number; variants: Record<string, { cached: number; missed: number; total: number }> } | null>(null)
 
+  const availableKeys = new Set(availableBrackets.map(b => b.key))
+
+  const ALL_BRACKET_KEYS = [
+    'BRONZE_THROUGH_GOLD__CURRENT_PATCH',
+    'BRONZE_THROUGH_GOLD__CURRENT_EXPANSION',
+    'DIAMOND_THROUGH_LEGEND__CURRENT_PATCH',
+    'DIAMOND_THROUGH_LEGEND__CURRENT_EXPANSION',
+    'ALL__LAST_7_DAYS',
+    'ALL__LAST_14_DAYS',
+  ]
+
   useEffect(() => {
     api.getDataStatus().then(status => {
       setCfStatus(status.cf)
     }).catch(() => {})
     api.getArtCacheStats().then(setCacheStats).catch(() => {})
+    fetchBrackets().catch(() => {})
   }, [])
 
   async function handleReauth() {
@@ -65,9 +91,77 @@ export default function SettingsView() {
     }
   }
 
+  async function handleUpgrade() {
+    const trimmed = upgradeInput.trim()
+    if (!trimmed) return
+    setUpgradeLoading(true)
+    setUpgradeError('')
+    try {
+      const result = await api.register(trimmed)
+      if (result.success && result.token) {
+        setStoredToken(result.token)
+        if (result.accountLo) setStoredAccountId(result.accountLo)
+        setAuthTier('full')
+        window.location.reload()
+      } else {
+        setUpgradeError(result.error || 'Upgrade failed')
+      }
+    } catch (err: unknown) {
+      setUpgradeError(err instanceof Error ? err.message : 'Connection failed')
+    } finally {
+      setUpgradeLoading(false)
+    }
+  }
+
   return (
     <div className="p-6 max-w-2xl">
       <h1 className="text-xl font-bold text-gold mb-6">Settings</h1>
+
+      {authTier === 'collection' && (
+        <section className="bg-amber-900/20 rounded-lg border border-amber-500/30 p-5 mb-6">
+          <h2 className="text-sm font-bold text-amber-400 mb-2">Upgrade to Full Account</h2>
+          <p className="text-xs text-gray-400 mb-3">
+            Connect your HSReplay session ID to unlock persistent settings, collection history, and premium stat brackets.
+          </p>
+          <div className="bg-white/5 rounded-lg p-3 mb-3 border border-white/5">
+            <ol className="text-[11px] text-gray-400 space-y-1">
+              <li className="flex gap-2">
+                <span className="text-amber-400 shrink-0">1.</span>
+                <span>Open <a href="https://hsreplay.net" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">hsreplay.net</a> and log in</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="text-amber-400 shrink-0">2.</span>
+                <span>Open DevTools (<code className="px-1 bg-white/10 rounded text-[10px]">F12</code>) &rarr; Application &rarr; Cookies &rarr; hsreplay.net</span>
+              </li>
+              <li className="flex gap-2">
+                <span className="text-amber-400 shrink-0">3.</span>
+                <span>Copy the <code className="px-1 bg-white/10 rounded text-[10px] text-gold/70">sessionid</code> cookie value</span>
+              </li>
+            </ol>
+          </div>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              placeholder="Paste your HSReplay session ID"
+              value={upgradeInput}
+              onChange={e => setUpgradeInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleUpgrade()}
+              className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm
+                         font-mono text-gray-300 placeholder:text-gray-600
+                         focus:outline-none focus:border-amber-500/50"
+            />
+            <button
+              onClick={handleUpgrade}
+              disabled={upgradeLoading || !upgradeInput.trim()}
+              className="px-4 py-2 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded text-sm
+                         hover:bg-amber-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {upgradeLoading ? 'Upgrading...' : 'Upgrade'}
+            </button>
+          </div>
+          {upgradeError && <p className="text-red-400 text-xs mt-2">{upgradeError}</p>}
+        </section>
+      )}
 
       {/* Collection Sync */}
       <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
@@ -81,12 +175,14 @@ export default function SettingsView() {
           >
             {syncLoading ? 'Syncing...' : 'Sync Collection'}
           </button>
-          <button
-            onClick={() => setShowReauth(!showReauth)}
-            className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm hover:bg-white/15 transition-colors"
-          >
-            Update Session
-          </button>
+          {authTier === 'full' && (
+            <button
+              onClick={() => setShowReauth(!showReauth)}
+              className="px-4 py-2 bg-white/10 text-gray-300 rounded text-sm hover:bg-white/15 transition-colors"
+            >
+              Update Session
+            </button>
+          )}
         </div>
 
         {showReauth && (
@@ -137,6 +233,70 @@ export default function SettingsView() {
         )}
       </section>
 
+      {/* Account Info */}
+      {battletag && (
+        <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
+          <h2 className="text-sm font-bold text-white mb-3">Account</h2>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-300">{battletag}</span>
+            {isPremium && (
+              <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded">
+                Premium
+              </span>
+            )}
+          </div>
+          {isPremium && hostedMode && authTier === 'full' && (
+            <div className="mt-4 pt-4 border-t border-white/5">
+              <label className="flex items-start gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={premiumConsent}
+                  onChange={e => setPremiumConsent(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-white/20 bg-white/5 text-gold
+                             focus:ring-gold/30 focus:ring-offset-0 cursor-pointer"
+                />
+                <div>
+                  <span className="text-sm text-gray-300 group-hover:text-white transition-colors">
+                    Share my premium session for stats collection
+                  </span>
+                  <p className="text-[10px] text-gray-500 mt-1 leading-relaxed">
+                    Your HSReplay session will be used server-side to fetch premium stat brackets
+                    for all users. In extreme cases, HSReplay could restrict your account.
+                  </p>
+                </div>
+              </label>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Meta Stats Bracket */}
+      {authTier === 'full' && (
+        <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
+          <h2 className="text-sm font-bold text-white mb-3">Meta Stats Bracket</h2>
+          <p className="text-xs text-gray-400 mb-3">
+            Choose which rank range and time period to use for card play rate and win rate stats.
+            Premium brackets require at least one consenting premium user.
+          </p>
+          <div className="mb-3">
+            <Dropdown
+              label="Bracket"
+              options={ALL_BRACKET_KEYS.map(key => ({
+                value: key,
+                label: `${bracketLabel(key)}${!availableKeys.has(key) ? ' (unavailable)' : ''}`,
+              }))}
+              value={metaBracket}
+              onChange={setMetaBracket}
+            />
+          </div>
+          {!availableKeys.has(metaBracket) && metaBracket !== FREE_BRACKET && (
+            <p className="text-[10px] text-amber-400/80">
+              Selected bracket is currently unavailable. Free bracket will be used as fallback.
+            </p>
+          )}
+        </section>
+      )}
+
       {!hostedMode && (
         <>
           {/* Card Database */}
@@ -173,15 +333,16 @@ export default function SettingsView() {
           <section className="bg-white/5 rounded-lg border border-white/10 p-5 mb-6">
             <h2 className="text-sm font-bold text-white mb-3">Meta Stats</h2>
             <p className="text-xs text-gray-400 mb-3">
-              Refresh card popularity and win rate data from HSReplay. Auto-refreshes every 4 hours.
+              Refresh all stat brackets from HSReplay. Auto-refreshes every 12 hours.
             </p>
             <button
               onClick={async () => {
                 setRefreshingMeta(true)
                 try {
                   const result = await api.refreshMeta()
-                  await fetchMeta()
-                  setSyncResult({ success: true, message: `Meta stats refreshed: ${result.count} cards` })
+                  await Promise.all([fetchMeta(), fetchBrackets()])
+                  const bracketMsg = result.brackets ? ` (${result.brackets} brackets)` : ''
+                  setSyncResult({ success: true, message: `Meta stats refreshed: ${result.count} cards${bracketMsg}` })
                 } catch (err: unknown) {
                   const message = err instanceof Error ? err.message : 'Failed to refresh meta'
                   setSyncResult({ success: false, message })

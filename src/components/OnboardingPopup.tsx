@@ -1,30 +1,35 @@
 import { useState } from 'react'
-import { api, setStoredToken, setStoredAccountId } from '../services/api.ts'
+import {
+  api, setAuthTier, setCollectionMeta, setLocalCollection,
+} from '../services/api.ts'
 
 interface Props {
   onComplete: () => void
 }
 
 export default function OnboardingPopup({ onComplete }: Props) {
-  const [sessionInput, setSessionInput] = useState('')
+  const [collectionUrl, setCollectionUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  async function handleConnect() {
-    const trimmed = sessionInput.trim()
-    if (!trimmed) { setError('Please paste your session ID'); return }
+  async function handleCollectionLogin() {
+    const trimmed = collectionUrl.trim()
+    if (!trimmed) { setError('Please paste your collection URL'); return }
 
     setLoading(true)
     setError('')
 
     try {
-      const result = await api.register(trimmed)
-      if (result.success && result.token) {
-        setStoredToken(result.token)
-        if (result.accountLo) setStoredAccountId(result.accountLo)
+      const result = await api.collectionLogin(trimmed)
+      if (result.success) {
+        setAuthTier('collection')
+        setCollectionMeta({
+          accountLo: result.accountLo,
+          region: result.region,
+          battletag: result.battletag,
+        })
+        setLocalCollection({ collection: result.collection, dust: result.dust, syncedAt: Date.now() })
         onComplete()
-      } else {
-        setError(result.error || 'Registration failed')
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Connection failed')
@@ -65,19 +70,19 @@ export default function OnboardingPopup({ onComplete }: Props) {
           </div>
 
           <div className="bg-white/5 rounded-lg p-4 border border-white/10">
-            <h3 className="text-sm font-medium text-white mb-2">Get your session cookie</h3>
+            <h3 className="text-sm font-medium text-white mb-2">Get your collection URL</h3>
             <ol className="text-sm text-gray-400 space-y-1.5">
               <li className="flex gap-2">
                 <span className="text-gold shrink-0">1.</span>
-                <span>Open <a href="https://hsreplay.net" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">hsreplay.net</a> and log in</span>
+                <span>Go to <a href="https://hsreplay.net/account/" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">HSReplay Account Settings</a></span>
               </li>
               <li className="flex gap-2">
                 <span className="text-gold shrink-0">2.</span>
-                <span>Open DevTools (<code className="text-xs bg-white/10 px-1 rounded">F12</code>) &rarr; Application &rarr; Cookies &rarr; hsreplay.net</span>
+                <span>Under <strong className="text-white">Collection</strong>, set visibility to <strong className="text-white">Public</strong></span>
               </li>
               <li className="flex gap-2">
                 <span className="text-gold shrink-0">3.</span>
-                <span>Copy the <code className="text-xs bg-white/10 px-1 rounded">sessionid</code> cookie value</span>
+                <span>Open <a href="https://hsreplay.net/collection/mine/" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300">your collection page</a> and use the copy URL button to copy the link</span>
               </li>
             </ol>
           </div>
@@ -85,31 +90,29 @@ export default function OnboardingPopup({ onComplete }: Props) {
 
         <div className="space-y-3">
           <input
-            type="password"
-            value={sessionInput}
-            onChange={e => setSessionInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleConnect()}
-            placeholder="Paste your HSReplay session ID here"
+            type="text"
+            value={collectionUrl}
+            onChange={e => setCollectionUrl(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleCollectionLogin()}
+            placeholder="https://hsreplay.net/collection/2/12345678/"
             className="w-full bg-white/5 border border-white/15 rounded-lg px-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-gold/50"
             disabled={loading}
           />
 
-          {error && (
-            <p className="text-red-400 text-sm">{error}</p>
-          )}
+          {error && <p className="text-red-400 text-sm">{error}</p>}
 
           <button
-            onClick={handleConnect}
-            disabled={loading || !sessionInput.trim()}
+            onClick={handleCollectionLogin}
+            disabled={loading || !collectionUrl.trim()}
             className="w-full py-3 rounded-lg font-medium text-sm transition-colors bg-gold/20 text-gold border border-gold/30 hover:bg-gold/30 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'Connecting to HSReplay...' : 'Connect'}
+            {loading ? 'Loading collection...' : 'View Collection'}
           </button>
-        </div>
 
-        <p className="text-[11px] text-gray-600 mt-4 text-center">
-          Your session cookie is used to sync your collection and is stored securely on the server.
-        </p>
+          <p className="text-[11px] text-gray-600 text-center">
+            Your collection data is stored locally in this browser only.
+          </p>
+        </div>
       </div>
     </div>
   )

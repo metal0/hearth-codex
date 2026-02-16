@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../stores/store.ts'
-import { RARITY_COLORS, RARITY_ORDER, DUST_DISENCHANT, DUST_DISENCHANT_GOLDEN, CLASS_COLORS } from '../types.ts'
-import { DustIcon, RarityGem } from '../components/Icons.tsx'
+import { DUST_DISENCHANT, DUST_DISENCHANT_GOLDEN, CLASS_COLORS, bracketLabel } from '../types.ts'
+import { DustIcon } from '../components/Icons.tsx'
+import { rarityBleedStyle } from '../components/CardCircle.tsx'
 import type { EnrichedCard, Rarity } from '../types.ts'
 import CardHover from '../components/CardHover.tsx'
 import ClassPicker, { ClassIcon, classLabel } from '../components/ClassPicker.tsx'
@@ -19,9 +20,11 @@ interface DisenchantCandidate {
   combinedWinrate: number
   combinedDecks: number
   isExtra: boolean
+  coreWarning?: boolean
+  setName: string
 }
 
-type SortCol = 'name' | 'variant' | 'rarity' | 'dust' | 'played' | 'winrate' | 'safety'
+type SortCol = 'name' | 'variant' | 'set' | 'dust' | 'played' | 'winrate' | 'safety'
 
 function safetyColor(safety: number): string {
   if (safety >= 90) return 'text-green-400'
@@ -29,6 +32,27 @@ function safetyColor(safety: number): string {
   if (safety >= 50) return 'text-yellow-400'
   if (safety >= 30) return 'text-orange-400'
   return 'text-red-400'
+}
+
+function computeSafety(played: number, wr: number, decks: number): number {
+  const baseSafety = played <= 0.5 ? 100 : 100 * Math.exp(-0.1 * (played - 0.5))
+  const hasReliableWr = decks >= 100 && wr > 0
+  let wrMult = 1
+  if (hasReliableWr) {
+    if (wr >= 50) wrMult = Math.exp(-0.12 * (wr - 50))
+    else if (wr < 45) wrMult = Math.min(1.5, 1 + (45 - wr) * 0.05)
+  }
+  return Math.max(0, Math.min(99, Math.round(baseSafety * wrMult)))
+}
+
+function computeCoreDupSafety(played: number, wr: number, decks: number): number {
+  if (played <= 1) return 100
+  let safety = 100 * Math.exp(-0.0055 * (played - 1))
+  const hasReliableWr = decks >= 100 && wr > 0
+  if (hasReliableWr && wr > 50) {
+    safety *= Math.exp(-0.005 * (wr - 50))
+  }
+  return Math.max(0, Math.min(100, Math.round(safety)))
 }
 
 export default function DisenchantAdvisorView() {
@@ -39,22 +63,23 @@ export default function DisenchantAdvisorView() {
   const metaStandard = useStore(s => s.metaStandard)
   const metaWild = useStore(s => s.metaWild)
   const collectionMode = useStore(s => s.collectionMode)
+  const metaBracket = useStore(s => s.metaBracket)
 
-  const [selectedRarities, setSelectedRarities] = useState<Rarity[]>([])
+  const [selectedRarities, setSelectedRarities] = useState<Rarity[]>(['LEGENDARY', 'EPIC', 'RARE'])
   const [selectedClass, setSelectedClass] = useState('')
   const [selectedSet, setSelectedSet] = useState('')
   const [sortCol, setSortCol] = useState<SortCol>('safety')
   const [sortAsc, setSortAsc] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
 
-  const [playedThreshold, setPlayedThreshold] = useState(5)
-  const [goldenKeepThreshold, setGoldenKeepThreshold] = useState(5)
-  const [minSafety, setMinSafety] = useState(50)
-  const [hideNoWinrate, setHideNoWinrate] = useState(true)
+  const [playedThreshold, setPlayedThreshold] = useState(3)
+  const [maxWinrate, setMaxWinrate] = useState(45)
+  const [minSafety, setMinSafety] = useState(80)
+  const [hideNoWinrate, setHideNoWinrate] = useState(false)
 
   const setOptions = useMemo(() => [
     { value: '', label: 'All Sets' },
-    ...expansions.map(exp => ({
+    ...expansions.filter(e => e.code !== 'CORE').map(exp => ({
       value: exp.code,
       label: `${exp.name}${exp.standard ? ' (S)' : ''}`,
     })),
@@ -65,165 +90,124 @@ export default function DisenchantAdvisorView() {
     const results: DisenchantCandidate[] = []
     let excluded = 0
     let excludedWr = 0
+    const setNameMap = new Map(expansions.map(e => [e.code, e.name]))
 
     for (const card of enriched) {
       if (!collection) continue
-      const { normalCount, goldenCount, maxCopies, rarity } = card
+      if (card.set === 'CORE' || card.set === 'EVENT') continue
+      const rawCounts = collection.collection?.[card.dbfId] || [0, 0, 0, 0]
+      const normalCount = rawCounts[0] || 0
+      const goldenCount = rawCounts[1] || 0
+      const { maxCopies, rarity } = card
       if (normalCount === 0 && goldenCount === 0) continue
 
       const deNormalAvail = Math.max(0, normalCount - (card.freeNormal ? 1 : 0))
       const deGoldenAvail = Math.max(0, goldenCount - (card.freeGolden ? 1 : 0))
       if (deNormalAvail === 0 && deGoldenAvail === 0) continue
 
-      const stdEntry = metaStandard[card.dbfId]
-      const wildEntry = metaWild[card.dbfId]
-      const combinedPlayed = Math.max(stdEntry?.popularity ?? 0, wildEntry?.popularity ?? 0)
-      const stdPop = stdEntry?.popularity ?? 0
-      const wildPop = wildEntry?.popularity ?? 0
-      const combinedWinrate = stdPop >= wildPop
-        ? (stdEntry?.winrate ?? 0)
-        : (wildEntry?.winrate ?? 0)
-      const combinedDecks = Math.max(stdEntry?.decks ?? 0, wildEntry?.decks ?? 0)
+      let stdEntry = metaStandard[card.dbfId]
+      let wildEntry = metaWild[card.dbfId]
+      if (card.aliasDbfIds) {
+        for (const alias of card.aliasDbfIds) {
+          const se = metaStandard[alias]
+          if (se && (!stdEntry || se.popularity > stdEntry.popularity)) stdEntry = se
+          const we = metaWild[alias]
+          if (we && (!wildEntry || we.popularity > wildEntry.popularity)) wildEntry = we
+        }
+      }
+      const stdGames = stdEntry?.decks ?? 0
+      const wildGames = wildEntry?.decks ?? 0
+      const totalGamesForWeight = stdGames + wildGames
+      const combinedPlayed = totalGamesForWeight > 0
+        ? ((stdEntry?.popularity ?? 0) * stdGames + (wildEntry?.popularity ?? 0) * wildGames) / totalGamesForWeight
+        : 0
+      const combinedWinrate = totalGamesForWeight > 0
+        ? ((stdEntry?.winrate ?? 0) * stdGames + (wildEntry?.winrate ?? 0) * wildGames) / totalGamesForWeight
+        : 0
+      const combinedDecks = totalGamesForWeight
+      const hasReliableWr = combinedDecks >= 100 && combinedWinrate > 0
 
       if (combinedPlayed === 0) {
         excluded++
         continue
       }
 
-      const hasWinrate = combinedDecks >= 100 && combinedWinrate > 0
-      if (hideNoWinrate && !hasWinrate) {
+      if (hideNoWinrate && !hasReliableWr) {
         excludedWr++
         continue
       }
 
-      const usable = normalCount + goldenCount
-      const extras = usable - maxCopies
-      const isMeta = combinedPlayed >= goldenKeepThreshold
+      const totalPlayable = card.normalCount + card.goldenCount + card.diamondCount + card.signatureCount
+      const extras = totalPlayable - maxCopies
+      const hasPremium = card.diamondCount > 0 || card.signatureCount > 0
+
+      const cardSetName = setNameMap.get(card.set) ?? card.set
+
+      const pushCandidate = (variant: 'normal' | 'golden', count: number, reason: string, safety: number, isExtra: boolean, coreWarning?: boolean, overrideSetName?: string) => {
+        const dustValue = (variant === 'golden' ? DUST_DISENCHANT_GOLDEN[rarity] : DUST_DISENCHANT[rarity]) * count
+        results.push({ card, variant, count, dustValue, reason, safety, combinedPlayed, combinedWinrate, combinedDecks, isExtra, coreWarning, setName: overrideSetName ?? cardSetName })
+      }
+
+      if (card.inCore) {
+        const dupSafety = computeCoreDupSafety(combinedPlayed, combinedWinrate, combinedDecks)
+
+        if (extras > 0) {
+          let remaining = extras
+          if (deNormalAvail > 0) {
+            const n = Math.min(remaining, deNormalAvail)
+            remaining -= n
+            const reason = hasPremium ? `In Core — ${card.diamondCount > 0 ? 'Diamond' : 'Signature'} upgrade`
+              : card.goldenCount > 0 ? 'In Core — Golden upgrade' : 'In Core — Extra'
+            pushCandidate('normal', n, reason, dupSafety, dupSafety === 100, true)
+          }
+          if (remaining > 0 && deGoldenAvail > 0 && dupSafety >= 100) {
+            const g = Math.min(remaining, deGoldenAvail)
+            pushCandidate('golden', g, 'In Core — Extra golden', dupSafety, true, true)
+          }
+        } else {
+          if (deNormalAvail > 0) pushCandidate('normal', deNormalAvail, 'In Core — DE', dupSafety, dupSafety === 100, true)
+          if (deGoldenAvail > 0 && dupSafety >= 100) pushCandidate('golden', deGoldenAvail, 'In Core — DE golden', dupSafety, true, true)
+        }
+        continue
+      }
+
+      if (hasReliableWr && combinedWinrate > maxWinrate) continue
 
       if (extras > 0) {
-        let deNormal: number, deGolden: number
+        let remaining = extras
+        const premiumLabel = card.diamondCount > 0 ? 'Diamond' : 'Signature'
 
-        if (isMeta) {
-          deNormal = Math.min(extras, deNormalAvail)
-          deGolden = 0
-        } else {
-          deGolden = Math.min(extras, deGoldenAvail)
-          deNormal = Math.min(extras - deGolden, deNormalAvail)
+        if (deNormalAvail > 0) {
+          const n = Math.min(remaining, deNormalAvail)
+          remaining -= n
+          const reason = hasPremium ? `${premiumLabel} upgrade`
+            : card.goldenCount > 0 ? 'Golden upgrade' : 'Extra copy'
+          pushCandidate('normal', n, reason, 100, true)
         }
-
-        if (deNormal > 0) {
-          const hasGoldenUpgrade = goldenCount > 0
-          results.push({
-            card,
-            variant: 'normal',
-            count: deNormal,
-            dustValue: DUST_DISENCHANT[rarity] * deNormal,
-            reason: hasGoldenUpgrade ? 'Golden upgrade' : 'Extra copy',
-            safety: 100,
-            combinedPlayed,
-            combinedWinrate,
-            combinedDecks,
-            isExtra: true,
-          })
-        }
-
-        if (deGolden > 0) {
-          results.push({
-            card,
-            variant: 'golden',
-            count: deGolden,
-            dustValue: DUST_DISENCHANT_GOLDEN[rarity] * deGolden,
-            reason: 'Golden redundant',
-            safety: 100,
-            combinedPlayed,
-            combinedWinrate,
-            combinedDecks,
-            isExtra: true,
-          })
+        if (remaining > 0 && deGoldenAvail > 0) {
+          const g = Math.min(remaining, deGoldenAvail)
+          const reason = hasPremium ? `${premiumLabel} upgrade` : 'Extra copy'
+          pushCandidate('golden', g, reason, 100, true)
         }
       }
 
       if (extras <= 0 && combinedPlayed < playedThreshold) {
-        const safety = Math.round(100 * (1 - combinedPlayed / playedThreshold))
-        const clampedSafety = Math.max(0, Math.min(99, safety))
-        const reason = combinedPlayed === 0 ? 'Never played' : `Rarely played (${combinedPlayed.toFixed(2)}%)`
+        const safety = computeSafety(combinedPlayed, combinedWinrate, combinedDecks)
+        const reason = `Rarely played (${combinedPlayed.toFixed(2)}%)`
 
-        if (deNormalAvail > 0 && deGoldenAvail > 0) {
-          if (isMeta) {
-            results.push({
-              card,
-              variant: 'normal',
-              count: deNormalAvail,
-              dustValue: DUST_DISENCHANT[rarity] * deNormalAvail,
-              reason: reason + ' — keep golden',
-              safety: clampedSafety,
-              combinedPlayed,
-              combinedWinrate,
-              combinedDecks,
-              isExtra: false,
-            })
-          } else {
-            results.push({
-              card,
-              variant: 'golden',
-              count: deGoldenAvail,
-              dustValue: DUST_DISENCHANT_GOLDEN[rarity] * deGoldenAvail,
-              reason: reason + ' — max dust',
-              safety: clampedSafety,
-              combinedPlayed,
-              combinedWinrate,
-              combinedDecks,
-              isExtra: false,
-            })
-            results.push({
-              card,
-              variant: 'normal',
-              count: deNormalAvail,
-              dustValue: DUST_DISENCHANT[rarity] * deNormalAvail,
-              reason,
-              safety: clampedSafety,
-              combinedPlayed,
-              combinedWinrate,
-              combinedDecks,
-              isExtra: false,
-            })
-          }
-        } else {
-          if (deNormalAvail > 0) {
-            results.push({
-              card,
-              variant: 'normal',
-              count: deNormalAvail,
-              dustValue: DUST_DISENCHANT[rarity] * deNormalAvail,
-              reason,
-              safety: clampedSafety,
-              combinedPlayed,
-              combinedWinrate,
-              combinedDecks,
-              isExtra: false,
-            })
-          }
-
-          if (deGoldenAvail > 0) {
-            results.push({
-              card,
-              variant: 'golden',
-              count: deGoldenAvail,
-              dustValue: DUST_DISENCHANT_GOLDEN[rarity] * deGoldenAvail,
-              reason,
-              safety: clampedSafety,
-              combinedPlayed,
-              combinedWinrate,
-              combinedDecks,
-              isExtra: false,
-            })
-          }
-        }
+        if (deNormalAvail > 0) pushCandidate('normal', deNormalAvail, reason, safety, false)
+        if (deGoldenAvail > 0) pushCandidate('golden', deGoldenAvail, reason, safety, false)
       }
     }
 
     return { candidates: results, excludedNoStats: excluded, excludedNoWinrate: excludedWr }
-  }, [getEnrichedCards, collection, expansions, metaStandard, metaWild, playedThreshold, goldenKeepThreshold, hideNoWinrate, collectionMode])
+  }, [getEnrichedCards, collection, expansions, metaStandard, metaWild, playedThreshold, maxWinrate, hideNoWinrate, collectionMode])
+
+  const setOrder = useMemo(() => {
+    const order = new Map<string, number>()
+    expansions.forEach((e, i) => order.set(e.code, i))
+    return order
+  }, [expansions])
 
   const filtered = useMemo(() => {
     let items = candidates.filter(c => c.safety >= minSafety)
@@ -248,8 +232,9 @@ export default function DisenchantAdvisorView() {
           return dir * a.card.name.localeCompare(b.card.name)
         case 'variant':
           return dir * a.variant.localeCompare(b.variant) || b.dustValue - a.dustValue
-        case 'rarity':
-          return dir * (RARITY_ORDER[a.card.rarity] - RARITY_ORDER[b.card.rarity]) || b.dustValue - a.dustValue
+        case 'set':
+          return dir * ((setOrder.get(a.card.set) ?? 999) - (setOrder.get(b.card.set) ?? 999))
+            || a.card.name.localeCompare(b.card.name)
         case 'dust':
           return dir * (a.dustValue - b.dustValue) || a.card.name.localeCompare(b.card.name)
         case 'played':
@@ -264,7 +249,7 @@ export default function DisenchantAdvisorView() {
     })
 
     return items
-  }, [candidates, minSafety, selectedRarities, selectedClass, selectedSet, sortCol, sortAsc])
+  }, [candidates, minSafety, selectedRarities, selectedClass, selectedSet, sortCol, sortAsc, setOrder])
 
   const summary = useMemo(() => {
     const totalDust = filtered.reduce((s, c) => s + c.dustValue, 0)
@@ -287,7 +272,10 @@ export default function DisenchantAdvisorView() {
 
   return (
     <div className="p-6 max-w-6xl">
-      <h1 className="text-xl font-bold text-gold mb-6">Disenchant</h1>
+      <div className="flex items-baseline gap-3 mb-6">
+        <h1 className="text-xl font-bold text-gold">Disenchant</h1>
+        <span className="text-xs text-gray-500">Stats: <span className="text-gray-400">{bracketLabel(metaBracket)}</span></span>
+      </div>
 
       <div className="flex flex-wrap gap-3 mb-4 items-center">
         <RarityFilter selected={selectedRarities} onChange={setSelectedRarities} />
@@ -349,19 +337,19 @@ export default function DisenchantAdvisorView() {
           </div>
           <div>
             <label className="block text-xs text-gray-400 mb-1">
-              DE golden played below
+              Max winrate % (skip above)
             </label>
             <div className="flex items-center gap-2">
               <input
                 type="range"
-                min={0.01}
-                max={20}
-                step={0.01}
-                value={goldenKeepThreshold}
-                onChange={e => setGoldenKeepThreshold(parseFloat(e.target.value))}
+                min={30}
+                max={60}
+                step={1}
+                value={maxWinrate}
+                onChange={e => setMaxWinrate(parseInt(e.target.value))}
                 className="flex-1 accent-gold"
               />
-              <span className="text-sm text-white w-14 text-right">{goldenKeepThreshold.toFixed(2)}%</span>
+              <span className="text-sm text-white w-12 text-right">{maxWinrate}%</span>
             </div>
           </div>
           <div>
@@ -400,7 +388,7 @@ export default function DisenchantAdvisorView() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-white/10 text-gray-400 text-xs select-none">
-              <th className="text-left px-4 py-3 w-8"></th>
+              <th className="text-left px-2 py-3">Class</th>
               <th
                 className="text-left px-4 py-3 cursor-pointer hover:text-white"
                 onClick={() => handleSortClick('name')}
@@ -415,9 +403,9 @@ export default function DisenchantAdvisorView() {
               </th>
               <th
                 className="text-left px-4 py-3 cursor-pointer hover:text-white"
-                onClick={() => handleSortClick('rarity')}
+                onClick={() => handleSortClick('set')}
               >
-                Rarity{sortIndicator('rarity')}
+                Set{sortIndicator('set')}
               </th>
               <th
                 className="text-right px-4 py-3 cursor-pointer hover:text-white"
@@ -444,26 +432,54 @@ export default function DisenchantAdvisorView() {
                 Safety{sortIndicator('safety')}
               </th>
               <th className="text-left px-4 py-3">Reason</th>
-              <th className="text-left px-4 py-3">Class</th>
             </tr>
           </thead>
           <tbody>
             {filtered.slice(0, 300).map((c, i) => (
-              <tr key={`${c.card.dbfId}-${c.variant}-${i}`} className="border-b border-white/5 hover:bg-white/5">
-                <td className="px-4 py-2">
-                  <RarityGem size={14} rarity={c.card.rarity} />
+              <tr key={`${c.card.dbfId}-${c.variant}-${i}`} className="border-b border-white/5 hover:bg-white/5" style={{ height: 40 }}>
+                <td className="pl-2 pr-1 py-2">
+                  <span
+                    className="flex items-center justify-center w-8 h-8 rounded-full"
+                    style={{
+                      border: `1.5px solid ${CLASS_COLORS[c.card.cardClass] ?? '#808080'}`,
+                      boxShadow: 'inset 0 0 0 1.5px #000',
+                    }}
+                    title={classLabel(c.card.cardClass)}
+                  >
+                    <ClassIcon cls={c.card.cardClass} size={20} />
+                  </span>
                 </td>
-                <td className="px-4 py-2 text-white">
-                  <CardHover id={c.card.id} name={c.card.name} className="text-white" />
-                  {c.count > 1 && <span className="text-gray-500 ml-1">x{c.count}</span>}
+                <td className="px-4 py-1 text-white relative overflow-hidden">
+                  {rarityBleedStyle(c.card.rarity) && <div style={rarityBleedStyle(c.card.rarity)!} />}
+                  <div
+                    className="absolute z-[1] pointer-events-none"
+                    style={{
+                      right: -2,
+                      top: 0,
+                      bottom: 0,
+                      width: 140,
+                      backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${c.card.id}.jpg)`,
+                      backgroundSize: '160%',
+                      backgroundPosition: 'center 30%',
+                      opacity: 0.45,
+                      maskImage: 'linear-gradient(to right, transparent 0%, black 25%, black 80%, transparent 100%), linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)',
+                      WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 25%, black 80%, transparent 100%), linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)',
+                      maskComposite: 'intersect',
+                      WebkitMaskComposite: 'destination-in',
+                    }}
+                  />
+                  <CardHover id={c.card.id} name="" className="flex items-center gap-1.5 relative z-[2]" style={{ textShadow: '0 0 4px #000, 0 0 4px #000, 1px 1px 3px #000' }}>
+                    <span className="text-white">{c.card.name}</span>
+                    {c.count > 1 && <span className="text-[10px] font-bold ml-1.5 px-1 py-0.5 rounded bg-black/60 border border-white/25 text-gold leading-none">x{c.count}</span>}
+                  </CardHover>
                 </td>
                 <td className="px-4 py-2">
                   <span className={c.variant === 'golden' ? 'text-yellow-300' : 'text-gray-400'}>
                     {c.variant === 'golden' ? 'Golden' : 'Normal'}
                   </span>
                 </td>
-                <td className="px-4 py-2" style={{ color: RARITY_COLORS[c.card.rarity] }}>
-                  {c.card.rarity[0] + c.card.rarity.slice(1).toLowerCase()}
+                <td className="px-4 py-2 text-gray-400 text-xs">
+                  {c.setName}
                 </td>
                 <td className="px-4 py-2 text-right text-mana font-medium">
                   {c.dustValue.toLocaleString()}
@@ -478,12 +494,18 @@ export default function DisenchantAdvisorView() {
                   {c.safety}%
                 </td>
                 <td className="px-4 py-2 text-xs text-gray-400">
-                  {c.reason}
-                </td>
-                <td className="px-4 py-2 text-xs">
-                  <span className="flex items-center gap-1" style={{ color: CLASS_COLORS[c.card.cardClass] ?? '#808080' }}>
-                    <ClassIcon cls={c.card.cardClass} size={12} />
-                    {classLabel(c.card.cardClass)}
+                  <span className="flex items-center gap-1">
+                    {c.reason}
+                    {c.coreWarning && (
+                      <span className="relative group">
+                        <svg className="w-3.5 h-3.5 text-blue-400 cursor-help flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                        </svg>
+                        <div className="hidden group-hover:block absolute bottom-5 right-0 w-56 bg-gray-900 border border-white/20 rounded-lg p-2.5 text-[11px] leading-relaxed text-gray-300 z-50 shadow-xl">
+                          This card could rotate out of Core. If you disenchant it, you'll lose access to it entirely when that happens.
+                        </div>
+                      </span>
+                    )}
                   </span>
                 </td>
               </tr>
@@ -510,6 +532,50 @@ export default function DisenchantAdvisorView() {
           ].filter(Boolean).join(', ')} — excluded from results.
         </p>
       )}
+
+      <details className="mt-6 bg-white/5 rounded-lg border border-white/10">
+        <summary className="px-4 py-3 text-xs text-gray-400 cursor-pointer hover:text-gray-300 select-none">
+          How does the safety score work?
+        </summary>
+        <div className="px-4 pb-4 space-y-3 text-xs text-gray-400 leading-relaxed">
+          <div>
+            <span className="text-gray-300 font-medium">Safety score</span> — A 0-99% composite score
+            indicating how safe a card is to disenchant. Combines play rate (primary) with winrate (modifier).
+            Higher = safer to dust.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Play rate factor</span> — Cards played in
+            &le;0.5% of decks start at 100% safety. Safety drops exponentially as play rate increases
+            (e.g., 5% played &asymp; 64% safety, 10% played &asymp; 39% safety).
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Winrate modifier</span> — Applied when winrate
+            data is reliable (100+ decks). Cards with &gt;50% winrate have reduced safety (strong cards
+            you might regret dusting). Cards below 45% winrate get a small safety boost.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Extra copies (100% safe)</span> — Cards where
+            you own more playable copies than the deck limit (2 for non-legendary, 1 for legendary).
+            Includes golden/diamond/signature upgrades — if you have a premium version, the normal
+            copy is a pure extra.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">CORE-backed cards</span> — If a card is
+            currently in the Core set, you can play it for free. The expansion copy is safe to disenchant,
+            but may become unplayable if the card rotates out of Core (shown with an info icon).
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Free cards</span> — Cards obtained for free
+            (e.g., through achievements) are excluded from disenchant counts. Only craftable copies
+            are shown as candidates.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Thresholds</span> — Adjustable via the
+            Thresholds panel: max played % (hide meta-relevant cards), max winrate % (skip high-WR cards
+            entirely), and min safety % (filter the results table).
+          </div>
+        </div>
+      </details>
     </div>
   )
 }

@@ -48,6 +48,16 @@ export function StandardIcon({ size = 14, className }: IconProps) {
   return <MaskIcon url="/icons/mode-standard.svg" size={size} className={className} />
 }
 
+export function ManaIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 14 14" className={`inline-block shrink-0 ${className ?? ''}`}>
+      <path d="M7 0.5L12.5 3.5L12.5 10.5L7 13.5L1.5 10.5L1.5 3.5Z" fill="#1565C0" stroke="#4fc3f7" strokeWidth="0.8" />
+      <path d="M7 2L10.5 4.2V9.8L7 12L3.5 9.8V4.2Z" fill="#1e88e5" />
+      <path d="M7 2L10.5 4.2L7 6.5L3.5 4.2Z" fill="#42a5f5" />
+    </svg>
+  )
+}
+
 export function DustIcon({ size = 14, className }: IconProps) {
   return <WikiIcon url={`${WIKI}/thumb/Dust.png/${Math.round(size * 3)}px-Dust.png`} size={size} className={className} />
 }
@@ -109,6 +119,10 @@ export function HistoryIcon({ size = 18, className }: IconProps) {
       <polyline points="12 6 12 12 16 14" />
     </svg>
   )
+}
+
+export function DecksIcon({ size = 18, className }: IconProps) {
+  return <WikiIcon url={`${WIKI}/thumb/CardBack0.png/${Math.round(size * 3)}px-CardBack0.png`} size={size} className={className} />
 }
 
 export function PackAdvisorIcon({ size = 18, className }: IconProps) {

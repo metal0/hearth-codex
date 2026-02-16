@@ -496,3 +496,174 @@ export function simulate(
     alreadyComplete: false,
   };
 }
+
+// --- Meta-Only Mode ---
+
+export interface MetaMissing {
+  common: { at0: number; at1: number };
+  rare: { at0: number; at1: number };
+  epic: { at0: number; at1: number };
+  legendary: number;
+}
+
+interface MetaSimState {
+  commonAt0: number;
+  commonAt1: number;
+  rareAt0: number;
+  rareAt1: number;
+  epicAt0: number;
+  epicAt1: number;
+  legendaries: number;
+  craftCostRemaining: number;
+}
+
+function cloneMetaState(m: MetaMissing): MetaSimState {
+  return {
+    commonAt0: m.common.at0, commonAt1: m.common.at1,
+    rareAt0: m.rare.at0, rareAt1: m.rare.at1,
+    epicAt0: m.epic.at0, epicAt1: m.epic.at1,
+    legendaries: m.legendary,
+    craftCostRemaining:
+      m.legendary * DUST_CRAFT.legendary
+      + (m.epic.at0 * 2 + m.epic.at1) * DUST_CRAFT.epic
+      + (m.rare.at0 * 2 + m.rare.at1) * DUST_CRAFT.rare
+      + (m.common.at0 * 2 + m.common.at1) * DUST_CRAFT.common,
+  };
+}
+
+function addNormalCardMeta(s: SimState, ms: MetaSimState, rarity: Rarity): void {
+  if (rarity === 'legendary') {
+    if (s.legendaries.unowned > 0) {
+      if (ms.legendaries > 0 && Math.random() < ms.legendaries / s.legendaries.unowned) {
+        ms.legendaries--;
+        ms.craftCostRemaining -= DUST_CRAFT.legendary;
+      }
+      s.legendaries.unowned--;
+      s.legendaries.owned++;
+    } else {
+      s.dust += DUST_DISENCHANT.legendary;
+    }
+    return;
+  }
+
+  const pool = rarity === 'common' ? s.commons : rarity === 'rare' ? s.rares : s.epics;
+  const incomplete = pool.at0 + pool.at1;
+
+  if (incomplete === 0) {
+    s.dust += DUST_DISENCHANT[rarity];
+    return;
+  }
+
+  const metaAt0 = rarity === 'common' ? ms.commonAt0 : rarity === 'rare' ? ms.rareAt0 : ms.epicAt0;
+  const metaAt1 = rarity === 'common' ? ms.commonAt1 : rarity === 'rare' ? ms.rareAt1 : ms.epicAt1;
+
+  const roll = Math.random() * incomplete;
+  if (roll < pool.at0) {
+    if (metaAt0 > 0 && Math.random() < metaAt0 / pool.at0) {
+      if (rarity === 'common') { ms.commonAt0--; ms.commonAt1++; }
+      else if (rarity === 'rare') { ms.rareAt0--; ms.rareAt1++; }
+      else { ms.epicAt0--; ms.epicAt1++; }
+      ms.craftCostRemaining -= DUST_CRAFT[rarity];
+    }
+    pool.at0--;
+    pool.at1++;
+  } else {
+    if (metaAt1 > 0 && Math.random() < metaAt1 / pool.at1) {
+      if (rarity === 'common') ms.commonAt1--;
+      else if (rarity === 'rare') ms.rareAt1--;
+      else ms.epicAt1--;
+      ms.craftCostRemaining -= DUST_CRAFT[rarity];
+    }
+    pool.at1--;
+    pool.at2++;
+  }
+}
+
+function simulateMetaRun(
+  collection: ExpansionCollectionState,
+  startingDust: number,
+  isNewExpansion: boolean,
+  metaMissing: MetaMissing,
+): RunResult {
+  const state = cloneState(collection, startingDust);
+  const ms = cloneMetaState(metaMissing);
+  const pity = newPityState(isNewExpansion);
+
+  if (ms.craftCostRemaining <= 0 || state.dust >= ms.craftCostRemaining) {
+    const spent = Math.max(0, ms.craftCostRemaining);
+    return { packs: 0, dustLeft: state.dust - spent, dustGenerated: 0, dustSpentCrafting: spent };
+  }
+
+  let dustGenerated = 0;
+  let packs = 0;
+  const MAX_PACKS = 10000;
+
+  while (state.dust < ms.craftCostRemaining && packs < MAX_PACKS) {
+    const pack = generatePack(pity);
+    packs++;
+    const dustBefore = state.dust;
+
+    for (const card of pack) {
+      if (card.golden) {
+        state.dust += DUST_DISENCHANT_GOLDEN[card.rarity];
+      } else {
+        addNormalCardMeta(state, ms, card.rarity);
+      }
+    }
+
+    dustGenerated += state.dust - dustBefore;
+  }
+
+  const spent = Math.max(0, ms.craftCostRemaining);
+  return { packs, dustLeft: state.dust - spent, dustGenerated, dustSpentCrafting: spent };
+}
+
+export function simulateMeta(
+  collection: ExpansionCollectionState,
+  dust: number,
+  metaMissing: MetaMissing,
+  runs: number = 200,
+  isNewExpansion: boolean = false,
+): SimulationResult {
+  const ms = cloneMetaState(metaMissing);
+  if (ms.craftCostRemaining <= 0 || dust >= ms.craftCostRemaining) {
+    return {
+      expansion: collection.expansion.name,
+      runs, mean: 0, median: 0, min: 0, max: 0, p25: 0, p75: 0,
+      avgDustLeft: dust - Math.max(0, ms.craftCostRemaining),
+      avgDustGenerated: 0, avgDustSpentCrafting: Math.max(0, ms.craftCostRemaining),
+      alreadyComplete: true,
+    };
+  }
+
+  const results: number[] = [];
+  const dustLefts: number[] = [];
+  const dustGens: number[] = [];
+  const dustCrafts: number[] = [];
+
+  for (let i = 0; i < runs; i++) {
+    const run = simulateMetaRun(collection, dust, isNewExpansion, metaMissing);
+    results.push(run.packs);
+    dustLefts.push(run.dustLeft);
+    dustGens.push(run.dustGenerated);
+    dustCrafts.push(run.dustSpentCrafting);
+  }
+
+  results.sort((a, b) => a - b);
+  const avg = (arr: number[]) => Math.round(arr.reduce((s, v) => s + v, 0) / runs);
+
+  return {
+    expansion: collection.expansion.name,
+    runs,
+    mean: Math.round(results.reduce((s, v) => s + v, 0) / runs),
+    median: results[Math.floor(runs / 2)],
+    min: results[0],
+    max: results[runs - 1],
+    p25: results[Math.floor(runs * 0.25)],
+    p75: results[Math.floor(runs * 0.75)],
+    avgDustLeft: avg(dustLefts),
+    avgDustGenerated: avg(dustGens),
+    avgDustSpentCrafting: avg(dustCrafts),
+    alreadyComplete: false,
+  };
+}

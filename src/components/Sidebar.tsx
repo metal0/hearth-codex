@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo, useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useStore } from '../stores/store.ts'
-import { CardIcon, CalculatorIcon, CraftIcon, PackAdvisorIcon, DustIcon, HistoryIcon, RarityGem } from './Icons.tsx'
+import { CardIcon, CalculatorIcon, CraftIcon, PackAdvisorIcon, DecksIcon, DustIcon, HistoryIcon, RarityGem } from './Icons.tsx'
 import { RARITY_COLORS, DUST_COST, DUST_DISENCHANT, DUST_DISENCHANT_GOLDEN } from '../types.ts'
 import type { Rarity, CollectionMode } from '../types.ts'
 import { useRotationInfo } from '../hooks/useRotationInfo.ts'
@@ -11,6 +11,7 @@ const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/calculator', label: 'Cost Calculator', icon: <CalculatorIcon size={16} /> },
   { to: '/craft', label: 'Crafting', icon: <CraftIcon size={16} /> },
   { to: '/packs', label: 'Packs', icon: <PackAdvisorIcon size={16} /> },
+  { to: '/decks', label: 'Decks', icon: <DecksIcon size={16} /> },
   { to: '/disenchant', label: 'Disenchant', icon: <DustIcon size={16} /> },
   { to: '/history', label: 'History', icon: <HistoryIcon size={16} /> },
 ]
@@ -234,6 +235,7 @@ export default function Sidebar() {
   const hostedMode = useStore(s => s.hostedMode)
   const battletag = useStore(s => s.battletag)
   const logout = useStore(s => s.logout)
+  const authTier = useStore(s => s.authTier)
 
   const [logoutConfirm, setLogoutConfirm] = useState(false)
   const rotationInfo = useRotationInfo(expansions)
@@ -267,6 +269,17 @@ export default function Sidebar() {
     const disenchantByRarity = emptyDisenchant()
     let totalDisenchant = 0
 
+    const bestMeta = (meta: Record<string, {popularity: number; winrate: number; decks: number}>, id: string, aliases?: string[]) => {
+      let best = meta[id]
+      if (aliases) {
+        for (const a of aliases) {
+          const e = meta[a]
+          if (e && (!best || e.popularity > best.popularity)) best = e
+        }
+      }
+      return best
+    }
+
     for (const [dbfId, card] of Object.entries(cards)) {
       const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2
       const isStandard = standardCodes.has(card.set)
@@ -284,8 +297,8 @@ export default function Sidebar() {
 
       let cardWeight: number
       if (isMeta) {
-        const stdPop = (metaStandard[dbfId]?.popularity ?? 0)
-        const wildPop = (metaWild[dbfId]?.popularity ?? 0)
+        const stdPop = (bestMeta(metaStandard, dbfId, card.aliasDbfIds)?.popularity ?? 0)
+        const wildPop = (bestMeta(metaWild, dbfId, card.aliasDbfIds)?.popularity ?? 0)
         const stdWeight = baseCraftCost * Math.max(stdPop, META_BASELINE)
         const wildWeight = baseCraftCost * Math.max(wildPop, META_BASELINE)
 
@@ -341,49 +354,49 @@ export default function Sidebar() {
 
       if (owned > 0) uniqueOwned++
 
-      if (barMode === 'normal') {
+      if (barMode === 'normal' && card.set !== 'CORE' && card.set !== 'EVENT' && rarity !== 'COMMON') {
         const deNormalAvail = Math.max(0, normal - (card.freeNormal ? 1 : 0))
         const deGoldenAvail = Math.max(0, golden - (card.freeGolden ? 1 : 0))
         if (deNormalAvail > 0 || deGoldenAvail > 0) {
-          const stdEntry = metaStandard[dbfId]
-          const wildEntry = metaWild[dbfId]
-          const combinedPlayed = Math.max(stdEntry?.popularity ?? 0, wildEntry?.popularity ?? 0)
+          const isInCore = card.aliasDbfIds?.some((a: string) => cards[a]?.set === 'CORE') ?? false
+          const addDE = (n: number, g: number) => {
+            if (n > 0) { const d = DUST_DISENCHANT[rarity] * n; disenchantByRarity[rarity].count += n; disenchantByRarity[rarity].dust += d; totalDisenchant += d }
+            if (g > 0) { const d = DUST_DISENCHANT_GOLDEN[rarity] * g; disenchantByRarity[rarity].count += g; disenchantByRarity[rarity].dust += d; totalDisenchant += d }
+          }
 
-          if (combinedPlayed > 0) {
+          const stdE = bestMeta(metaStandard, dbfId, card.aliasDbfIds)
+          const wildE = bestMeta(metaWild, dbfId, card.aliasDbfIds)
+          const stdGames = stdE?.decks ?? 0
+          const wildGames = wildE?.decks ?? 0
+          const totalGames = stdGames + wildGames
+          const combinedPlayed = totalGames > 0
+            ? ((stdE?.popularity ?? 0) * stdGames + (wildE?.popularity ?? 0) * wildGames) / totalGames
+            : 0
+          const combinedWinrate = totalGames > 0
+            ? ((stdE?.winrate ?? 0) * stdGames + (wildE?.winrate ?? 0) * wildGames) / totalGames
+            : 0
+
+          if (isInCore) {
+            const coreSafety = combinedPlayed <= 1 ? 100
+              : Math.max(0, Math.min(100, Math.round(100 * Math.exp(-0.0055 * (combinedPlayed - 1)) * (totalGames >= 100 && combinedWinrate > 50 ? Math.exp(-0.005 * (combinedWinrate - 50)) : 1))))
+            if (coreSafety >= 80) addDE(deNormalAvail, deGoldenAvail)
+          } else if (combinedPlayed > 0) {
             const usable = normal + golden
             const extras = usable - maxCopies
 
             if (extras > 0) {
-              const deNormal = Math.min(extras, deNormalAvail)
-              const deGolden = Math.min(extras - deNormal, deGoldenAvail)
-              if (deNormal > 0) {
-                const d = DUST_DISENCHANT[rarity] * deNormal
-                disenchantByRarity[rarity].count += deNormal
-                disenchantByRarity[rarity].dust += d
-                totalDisenchant += d
+              const deN = Math.min(extras, deNormalAvail)
+              const deG = Math.min(extras - deN, deGoldenAvail)
+              addDE(deN, deG)
+            } else if (combinedPlayed < 3 && !(combinedWinrate > 45 && totalGames >= 100)) {
+              const baseSafety = combinedPlayed <= 0.5 ? 100 : 100 * Math.exp(-0.1 * (combinedPlayed - 0.5))
+              let wrMult = 1
+              if (totalGames >= 100 && combinedWinrate > 0) {
+                if (combinedWinrate >= 50) wrMult = Math.exp(-0.12 * (combinedWinrate - 50))
+                else if (combinedWinrate < 45) wrMult = Math.min(1.5, 1 + (45 - combinedWinrate) * 0.05)
               }
-              if (deGolden > 0) {
-                const d = DUST_DISENCHANT_GOLDEN[rarity] * deGolden
-                disenchantByRarity[rarity].count += deGolden
-                disenchantByRarity[rarity].dust += d
-                totalDisenchant += d
-              }
-            } else if (combinedPlayed < 5) {
-              const safety = Math.round(100 * (1 - combinedPlayed / 5))
-              if (safety >= 50) {
-                if (deNormalAvail > 0) {
-                  const d = DUST_DISENCHANT[rarity] * deNormalAvail
-                  disenchantByRarity[rarity].count += deNormalAvail
-                  disenchantByRarity[rarity].dust += d
-                  totalDisenchant += d
-                }
-                if (deGoldenAvail > 0) {
-                  const d = DUST_DISENCHANT_GOLDEN[rarity] * deGoldenAvail
-                  disenchantByRarity[rarity].count += deGoldenAvail
-                  disenchantByRarity[rarity].dust += d
-                  totalDisenchant += d
-                }
-              }
+              const safety = Math.max(0, Math.min(99, Math.round(baseSafety * wrMult)))
+              if (safety >= 80) addDE(deNormalAvail, deGoldenAvail)
             }
           }
         }
@@ -468,7 +481,7 @@ export default function Sidebar() {
       )}
 
       <div className="flex-1 py-3">
-        {NAV_ITEMS.map(item => (
+        {NAV_ITEMS.filter(item => !(item.to === '/history' && authTier === 'collection')).map(item => (
           <NavLink
             key={item.to}
             to={item.to}

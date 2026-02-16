@@ -13,6 +13,8 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
   const isPartial = card.totalOwned > 0 && !isComplete
   const isUnowned = card.totalOwned === 0
   const fallbackUrl = `/art/${card.id}_normal.png?v=${av}`
+  const fallbackRef = useRef(fallbackUrl)
+  fallbackRef.current = fallbackUrl
   const isVariant = !card.imageUrl.includes('_normal.png')
 
   useEffect(() => {
@@ -23,14 +25,15 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
 
     if (isVariant) {
       const timer = setTimeout(() => {
-        if (!loadedRef.current) setImgSrc(fallbackUrl)
-      }, 1500)
+        if (!loadedRef.current) setImgSrc(fallbackRef.current)
+      }, 5000)
       return () => clearTimeout(timer)
     }
-  }, [card.imageUrl, card.id, isVariant, fallbackUrl])
+  }, [card.imageUrl, card.id])
 
   useEffect(() => {
-    if (!isVariant || imgSrc !== fallbackUrl || loadedRef.current) return
+    if (!isVariant || loadedRef.current) return
+    if (!imgSrc.includes('_normal.png')) return
     let cancelled = false
     const delays = [10000, 30000]
 
@@ -53,7 +56,7 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
 
     scheduleRetry()
     return () => { cancelled = true }
-  }, [isVariant, imgSrc, card.imageUrl, fallbackUrl])
+  }, [isVariant, imgSrc, card.imageUrl])
 
   const src = imgSrc
 
@@ -66,7 +69,7 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
     >
       {textFallback ? (
         <div
-          className="aspect-[3/4] flex flex-col items-center justify-center p-2 text-center border rounded-lg"
+          className="w-full aspect-[3/4] flex flex-col items-center justify-center p-2 text-center border rounded-lg"
           style={{ borderColor: RARITY_COLORS[card.rarity] + '40', backgroundColor: '#1a1a2e' }}
         >
           <div className="text-xs font-bold mb-1" style={{ color: RARITY_COLORS[card.rarity] }}>
@@ -85,7 +88,7 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
             if (src === fallbackUrl) setTextFallback(true)
             else setImgSrc(fallbackUrl)
           }}
-          className="w-full aspect-[3/4] object-cover object-top"
+          className="block w-full aspect-[3/4] object-cover object-top"
         />
       )}
 

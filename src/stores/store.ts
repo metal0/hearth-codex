@@ -1,14 +1,18 @@
 import { create } from 'zustand';
 import type {
-  CardDb, Expansion, CollectionData, CalculatorResponse,
+  CardDb, Expansion, CollectionData, CalculatorResponse, MetaEntry,
   OwnershipFilter, FormatFilter, SortOption, EnrichedCard, Rarity, CollectionMode,
-  ObtainabilityFilter,
+  ObtainabilityFilter, BracketInfo, ArchetypeInfo, DeckInfo, CompanionCard,
 } from '../types.ts';
-import { RARITY_ORDER, DUST_COST, HS_CLASSES, getDiamondAcquisition, getSignatureAcquisition } from '../types.ts';
+import { RARITY_ORDER, DUST_COST, HS_CLASSES, getDiamondAcquisition, getSignatureAcquisition, FREE_BRACKET } from '../types.ts';
 
 const CLASS_ORDER = Object.fromEntries(HS_CLASSES.map((c, i) => [c, i === 0 ? 99 : i])) as Record<string, number>;
 
-import { api, clearStoredToken, getStoredAccountId } from '../services/api.ts';
+import {
+  api, clearStoredToken, getStoredAccountId,
+  getAuthTier, getCollectionMeta, getLocalCollection, setLocalCollection,
+  clearCollectionOnlyData, type AuthTier,
+} from '../services/api.ts';
 
 function craftQueueKey(): string {
   const acct = getStoredAccountId();
@@ -25,14 +29,6 @@ function saveCraftQueue(queue: string[]) {
 }
 import { parseSearch } from '../utils/searchParser.ts';
 import CalculatorWorker from '../workers/calculator.worker.ts?worker';
-
-interface MetaEntry {
-  dbfId: number;
-  popularity: number;
-  winrate: number;
-  decks: number;
-  class: string;
-}
 
 export interface Toast {
   id: number;
@@ -80,7 +76,7 @@ interface AppState {
   dismissError: (index: number) => void;
   collectionSyncedAt: number | null;
   syncCollection: (sessionId?: string) => Promise<{ success: boolean; cards?: number; dust?: number; error?: string }>;
-  runCalculator: (expansionCodes: string[], dust: number) => Promise<void>;
+  runCalculator: (expansionCodes: string[], dust: number, metaOnly?: boolean) => Promise<void>;
 
   setCollectionMode: (mode: CollectionMode) => void;
   setSelectedSets: (sets: string[]) => void;
@@ -93,12 +89,37 @@ interface AppState {
   setSortBy: (sort: SortOption) => void;
   toggleSortDirection: () => void;
 
+  authTier: AuthTier;
   battletag: string | null;
   setBattletag: (tag: string | null) => void;
   artVersion: number;
   hostedMode: boolean;
   setHostedMode: (hosted: boolean) => void;
   logout: () => void;
+
+  metaBracket: string;
+  availableBrackets: BracketInfo[];
+  isPremium: boolean | null;
+  premiumConsent: boolean;
+  metaFallback: boolean;
+  setMetaBracket: (bracket: string) => Promise<void>;
+  fetchBrackets: () => Promise<void>;
+  setPremiumConsent: (consent: boolean) => Promise<void>;
+
+  showHeatmap: boolean;
+  toggleHeatmap: () => void;
+  filtersExpanded: boolean;
+  toggleFilters: () => void;
+
+  deckArchetypes: ArchetypeInfo[];
+  deckList: DeckInfo[];
+  deckCompanionCards: Record<string, CompanionCard>;
+  decksLoading: boolean;
+  decksFetchedAt: number | null;
+  deckGameMode: 'standard' | 'wild';
+  deckSource: 'hsreplay' | 'hsguru' | null;
+  setDeckGameMode: (mode: 'standard' | 'wild') => void;
+  fetchDecks: (opts?: { minGames?: number }) => Promise<void>;
 
   craftQueue: string[];
   addToQueue: (dbfId: string) => void;
@@ -140,17 +161,96 @@ export const useStore = create<AppState>((set, get) => ({
   obtainabilityFilter: 'all',
   formatFilter: 'standard',
   searchText: '',
-  sortBy: 'rarity',
-  sortAsc: false,
+  sortBy: 'set',
+  sortAsc: true,
 
   calculatorResults: null,
 
+  authTier: getAuthTier(),
   battletag: null,
   setBattletag: (tag) => set({ battletag: tag }),
   artVersion: 1,
   hostedMode: false,
   setHostedMode: (hosted) => set({ hostedMode: hosted }),
-  logout: () => { clearStoredToken(); window.location.reload(); },
+  logout: () => {
+    if (get().authTier === 'full') {
+      clearStoredToken();
+    } else {
+      clearCollectionOnlyData();
+    }
+    window.location.reload();
+  },
+
+  metaBracket: FREE_BRACKET,
+  availableBrackets: [],
+  isPremium: null,
+  premiumConsent: false,
+  metaFallback: false,
+
+  setMetaBracket: async (bracket) => {
+    if (get().authTier !== 'full') return;
+    set({ metaBracket: bracket, metaFallback: false });
+    try { await api.updateSettings({ metaBracket: bracket }); } catch {}
+    await get().fetchMeta();
+  },
+
+  fetchBrackets: async () => {
+    try {
+      const data = await api.getMetaBrackets();
+      set({ availableBrackets: data.brackets });
+    } catch (err) {
+      console.error('Failed to fetch brackets:', err);
+    }
+  },
+
+  setPremiumConsent: async (consent) => {
+    set({ premiumConsent: consent });
+    try { await api.updateSettings({ premiumConsent: consent }); } catch {}
+  },
+
+  showHeatmap: false,
+  toggleHeatmap: () => set(s => ({ showHeatmap: !s.showHeatmap })),
+  filtersExpanded: false,
+  toggleFilters: () => set(s => ({ filtersExpanded: !s.filtersExpanded })),
+
+  deckArchetypes: [],
+  deckList: [],
+  deckCompanionCards: {},
+  decksLoading: false,
+  decksFetchedAt: null,
+  deckGameMode: 'standard',
+  deckSource: null,
+  setDeckGameMode: (mode) => {
+    set({ deckGameMode: mode, deckArchetypes: [], deckList: [], deckCompanionCards: {}, decksFetchedAt: null, deckSource: null });
+    if (get().authTier === 'full') {
+      api.updateSettings({ deckGameMode: mode }).catch(() => {});
+    } else {
+      try { localStorage.setItem('hc-deck-game-mode', mode); } catch {}
+    }
+  },
+  fetchDecks: async (opts) => {
+    set({ decksLoading: true });
+    try {
+      const { metaBracket, deckGameMode } = get();
+      const data = await api.getDecks({
+        bracket: metaBracket,
+        gameType: deckGameMode,
+        minGames: opts?.minGames,
+      });
+      set({
+        deckArchetypes: data.archetypes,
+        deckList: data.decks,
+        deckCompanionCards: data.companionCards ?? {},
+        decksFetchedAt: data.fetchedAt,
+        deckSource: data.source ?? 'hsreplay',
+      });
+    } catch (err) {
+      console.error('Failed to fetch decks:', err);
+      get().addToast('Failed to load deck data', 'error');
+    } finally {
+      set({ decksLoading: false });
+    }
+  },
 
   craftQueue: loadCraftQueue(),
   addToQueue: (dbfId) => set(s => {
@@ -182,8 +282,13 @@ export const useStore = create<AppState>((set, get) => ({
   fetchCollection: async () => {
     set({ collectionLoading: true });
     try {
-      const collection = await api.getCollection();
-      set({ collection });
+      if (get().authTier === 'full') {
+        const collection = await api.getCollection();
+        set({ collection });
+      } else {
+        const local = getLocalCollection();
+        if (local) set({ collection: local });
+      }
     } catch (err) {
       console.error('Failed to fetch collection:', err);
     } finally {
@@ -202,12 +307,25 @@ export const useStore = create<AppState>((set, get) => ({
 
   fetchMeta: async () => {
     try {
-      const data = await api.getMeta();
-      if (data.standard && data.wild) {
-        set({ metaStandard: data.standard, metaWild: data.wild });
+      const bracket = get().metaBracket;
+      const data = await api.getMeta(bracket);
+      const update: Partial<AppState> = {
+        metaStandard: data.standard as Record<string, MetaEntry>,
+        metaWild: data.wild as Record<string, MetaEntry>,
+      };
+      if (data.bracket) update.metaBracket = data.bracket;
+      if (data.fallback) {
+        if (!get().metaFallback) {
+          get().addToast('Selected stats bracket unavailable. Showing free stats.', 'error');
+        }
+        update.metaFallback = true;
+        if (data.bracket && get().authTier === 'full') {
+          api.updateSettings({ metaBracket: data.bracket }).catch(() => {});
+        }
       } else {
-        set({ metaStandard: data, metaWild: {} });
+        update.metaFallback = false;
       }
+      set(update);
     } catch (err) {
       console.error('Failed to fetch meta:', err);
     }
@@ -216,20 +334,26 @@ export const useStore = create<AppState>((set, get) => ({
   syncCollection: async (sessionId?: string) => {
     set({ syncLoading: true });
     try {
-      const result = await api.syncCollection(sessionId);
-      if (result.success) {
-        if (result.dbRefreshed) {
-          await get().fetchCards();
-          await get().fetchExpansions();
-          if (!get().hostedMode || result.changedCards > 0) {
-            get().addToast(`Card database auto-updated (${result.changedCards || 'new'} cards detected)`, 'success');
-          }
+      if (get().authTier === 'full') {
+        const result = await api.syncCollection(sessionId);
+        if (result.success) {
+          await get().fetchCollection();
+          set({ collectionSyncedAt: Date.now() });
+          return { success: true, cards: result.cards, dust: result.dust };
         }
-        await get().fetchCollection();
-        set({ collectionSyncedAt: Date.now() });
-        return { success: true, cards: result.cards, dust: result.dust };
+        return { success: false, error: 'Sync returned unsuccessful' };
+      } else {
+        const meta = getCollectionMeta();
+        if (!meta) return { success: false, error: 'No collection URL configured' };
+        const result = await api.publicSync(meta.region, meta.accountLo);
+        if (result.success) {
+          const collectionData: CollectionData = { collection: result.collection, dust: result.dust, syncedAt: result.syncedAt };
+          setLocalCollection(collectionData);
+          set({ collection: collectionData, collectionSyncedAt: result.syncedAt });
+          return { success: true, cards: result.cards, dust: result.dust };
+        }
+        return { success: false, error: 'Sync returned unsuccessful' };
       }
-      return { success: false, error: 'Sync returned unsuccessful' };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       return { success: false, error: message };
@@ -238,10 +362,10 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
-  runCalculator: async (expansionCodes: string[], dust: number) => {
+  runCalculator: async (expansionCodes: string[], dust: number, metaOnly?: boolean) => {
     set({ calculatorLoading: true });
     try {
-      const { cards, expansions, collection } = get();
+      const { cards, expansions, collection, metaStandard, metaWild } = get();
       const results = await new Promise<CalculatorResponse>((resolve, reject) => {
         const worker = new CalculatorWorker();
         worker.onmessage = (e: MessageEvent<CalculatorResponse>) => {
@@ -252,7 +376,13 @@ export const useStore = create<AppState>((set, get) => ({
           reject(err);
           worker.terminate();
         };
-        worker.postMessage({ expansionCodes, expansions, cardDb: cards, collection, dust });
+        const msg: Record<string, unknown> = { expansionCodes, expansions, cardDb: cards, collection, dust };
+        if (metaOnly) {
+          msg.metaOnly = true;
+          msg.metaStandard = metaStandard;
+          msg.metaWild = metaWild;
+        }
+        worker.postMessage(msg);
       });
       set({ calculatorResults: results });
     } catch (err) {
@@ -328,13 +458,38 @@ export const useStore = create<AppState>((set, get) => ({
     for (const exp of expansions) setYearNum.set(exp.code, exp.yearNum);
 
     for (const [dbfId, card] of Object.entries(cards)) {
-      const counts = collection?.collection?.[dbfId] || [0, 0, 0, 0];
-      const normal = counts[0] || 0;
-      const golden = counts[1] || 0;
-      const diamond = counts[2] || 0;
-      const signature = counts[3] || 0;
+      const directCounts = collection?.collection?.[dbfId] || [0, 0, 0, 0];
+      let normal = directCounts[0] || 0;
+      let golden = directCounts[1] || 0;
+      let diamond = directCounts[2] || 0;
+      let signature = directCounts[3] || 0;
+      let inCore = card.set === 'CORE';
+      if (card.aliasDbfIds) {
+        for (const alias of card.aliasDbfIds) {
+          if (!inCore && cards[alias]?.set === 'CORE') inCore = true;
+          const ac = collection?.collection?.[alias];
+          if (ac) {
+            normal = Math.max(normal, ac[0] || 0);
+            golden = Math.max(golden, ac[1] || 0);
+            diamond = Math.max(diamond, ac[2] || 0);
+            signature = Math.max(signature, ac[3] || 0);
+          }
+        }
+      }
       const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2;
-      const metaEntry = meta[dbfId];
+      const resolveMeta = (source: Record<string, MetaEntry>) => {
+        let best = source[dbfId];
+        if (card.aliasDbfIds) {
+          for (const alias of card.aliasDbfIds) {
+            const ae = source[alias];
+            if (ae && (!best || ae.popularity > best.popularity)) best = ae;
+          }
+        }
+        return best;
+      };
+      const metaEntry = resolveMeta(meta);
+      const stdMeta = resolveMeta(metaStandard);
+      const wildMeta = resolveMeta(metaWild);
 
       let totalOwned: number;
       switch (collectionMode) {
@@ -395,10 +550,18 @@ export const useStore = create<AppState>((set, get) => ({
         inclusionRate: metaEntry?.popularity ?? 0,
         winrate: metaEntry?.winrate ?? 0,
         decks: metaEntry?.decks ?? 0,
+        inclusionRateStd: stdMeta?.popularity ?? 0,
+        winrateStd: stdMeta?.winrate ?? 0,
+        decksStd: stdMeta?.decks ?? 0,
+        inclusionRateWild: wildMeta?.popularity ?? 0,
+        winrateWild: wildMeta?.winrate ?? 0,
+        decksWild: wildMeta?.decks ?? 0,
         freeNormal: card.freeNormal,
         freeGolden: card.freeGolden,
         hasSignature: card.hasSignature,
         hasDiamond: card.hasDiamond,
+        inCore: inCore || undefined,
+        aliasDbfIds: card.aliasDbfIds,
       });
     }
 
@@ -428,6 +591,9 @@ export const useStore = create<AppState>((set, get) => ({
     if (selectedSets.length > 0) {
       const setCodes = new Set(selectedSets);
       cards = cards.filter(c => setCodes.has(c.set));
+    } else {
+      const nonCoreNames = new Set(cards.filter(c => c.set !== 'CORE').map(c => c.name));
+      cards = cards.filter(c => c.set !== 'CORE' || !nonCoreNames.has(c.name));
     }
 
     if (selectedClasses.length > 0) {
@@ -477,9 +643,9 @@ export const useStore = create<AppState>((set, get) => ({
       switch (sortBy) {
         case 'name': return dir * a.name.localeCompare(b.name);
         case 'cost': return dir * (a.cost - b.cost) || a.name.localeCompare(b.name);
-        case 'rarity': return dir * (RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity]) || a.cost - b.cost || a.name.localeCompare(b.name);
-        case 'set': return dir * ((setOrder.get(a.set) ?? 999) - (setOrder.get(b.set) ?? 999)) || a.name.localeCompare(b.name);
-        case 'class': return dir * ((CLASS_ORDER[a.cardClass] ?? 50) - (CLASS_ORDER[b.cardClass] ?? 50)) || a.cost - b.cost || a.name.localeCompare(b.name);
+        case 'rarity': return dir * (RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity]) || (a.cost - b.cost) || a.name.localeCompare(b.name);
+        case 'set': return dir * ((setOrder.get(a.set) ?? 999) - (setOrder.get(b.set) ?? 999)) || (a.cost - b.cost) || a.name.localeCompare(b.name);
+        case 'class': return dir * ((CLASS_ORDER[a.cardClass] ?? 50) - (CLASS_ORDER[b.cardClass] ?? 50)) || (a.cost - b.cost) || a.name.localeCompare(b.name);
         case 'inclusion': {
           const aHas = a.inclusionRate > 0;
           const bHas = b.inclusionRate > 0;

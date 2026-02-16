@@ -1,4 +1,5 @@
-import type { Expansion, CardDb } from '../types.ts';
+import type { Expansion, CardDb, MetaEntry } from '../types.ts';
+import type { MetaMissing } from './simulator.ts';
 
 export interface RarityState {
   at0: number;
@@ -72,4 +73,61 @@ export function parseHsReplayCollection(
     if (normalCount > 0) normalOwned.set(dbfId, normalCount);
   }
   return normalOwned;
+}
+
+export function computeMetaMissing(
+  expansion: Expansion,
+  cardDb: CardDb,
+  normalOwned: Map<string, number> | null,
+  metaStd: Record<string, MetaEntry>,
+  metaWild: Record<string, MetaEntry>,
+): MetaMissing {
+  const result: MetaMissing = {
+    common: { at0: 0, at1: 0 },
+    rare: { at0: 0, at1: 0 },
+    epic: { at0: 0, at1: 0 },
+    legendary: 0,
+  };
+
+  for (const [dbfId, card] of Object.entries(cardDb)) {
+    if (card.set !== expansion.code) continue;
+
+    let best: MetaEntry | undefined;
+    for (const source of [metaStd, metaWild]) {
+      let entry = source[dbfId];
+      if (card.aliasDbfIds) {
+        for (const alias of card.aliasDbfIds) {
+          const ae = source[alias];
+          if (ae && (!entry || ae.popularity > entry.popularity)) entry = ae;
+        }
+      }
+      if (entry && (!best || entry.popularity > best.popularity)) best = entry;
+    }
+
+    if (!best) continue;
+    const isMetaRelevant = best.popularity > 2 || (best.winrate > 50 && best.decks >= 100);
+    if (!isMetaRelevant) continue;
+
+    let owned = normalOwned?.get(dbfId) ?? 0;
+    if (card.aliasDbfIds && normalOwned) {
+      for (const alias of card.aliasDbfIds) {
+        owned = Math.max(owned, normalOwned.get(alias) ?? 0);
+      }
+    }
+
+    const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2;
+    const clamped = Math.min(owned, maxCopies);
+    if (clamped >= maxCopies) continue;
+
+    const rarity = card.rarity.toLowerCase();
+    if (rarity === 'legendary') {
+      result.legendary++;
+    } else {
+      const slot = rarity === 'common' ? result.common : rarity === 'rare' ? result.rare : result.epic;
+      if (clamped === 0) slot.at0++;
+      else slot.at1++;
+    }
+  }
+
+  return result;
 }

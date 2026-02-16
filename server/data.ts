@@ -12,6 +12,7 @@ export interface Expansion {
   year: string;
   yearNum: number;
   standard: boolean;
+  noPacks: boolean;
   commons: number;
   rares: number;
   epics: number;
@@ -33,6 +34,7 @@ export interface CardDbEntry {
   freeGolden?: boolean;
   hasSignature?: boolean;
   hasDiamond?: boolean;
+  aliasDbfIds?: string[];
 }
 
 export type CardDb = Record<string, CardDbEntry>;
@@ -64,8 +66,11 @@ interface ExpansionMetadata {
 }
 
 const EXPANSION_METADATA: Record<string, ExpansionMetadata> = {
+  // Year of the Scarab (2026)
+  CATACLYSM: { name: 'Cataclysm', year: 'Year of the Scarab', yearNum: 2026 },
   // Year of the Raptor (2025)
   TIME_TRAVEL: { name: 'Across the Timeways', year: 'Year of the Raptor', yearNum: 2025 },
+  WONDERS: { name: 'Caverns of Time', year: 'Year of the Raptor', yearNum: 2025 },
   THE_LOST_CITY: { name: "The Lost City of Un'Goro", year: 'Year of the Raptor', yearNum: 2025 },
   EMERALD_DREAM: { name: 'Into the Emerald Dream', year: 'Year of the Raptor', yearNum: 2025 },
   // Year of the Pegasus (2024)
@@ -78,6 +83,7 @@ const EXPANSION_METADATA: Record<string, ExpansionMetadata> = {
   BATTLE_OF_THE_BANDS: { name: 'Festival of Legends', year: 'Year of the Wolf', yearNum: 2023 },
   // Year of the Hydra (2022)
   RETURN_OF_THE_LICH_KING: { name: 'March of the Lich King', year: 'Year of the Hydra', yearNum: 2022 },
+  PATH_OF_ARTHAS: { name: 'Path of Arthas', year: 'Year of the Hydra', yearNum: 2022 },
   REVENDRETH: { name: 'Murder at Castle Nathria', year: 'Year of the Hydra', yearNum: 2022 },
   THE_SUNKEN_CITY: { name: 'Voyage to the Sunken City', year: 'Year of the Hydra', yearNum: 2022 },
   // Year of the Gryphon (2021)
@@ -88,8 +94,10 @@ const EXPANSION_METADATA: Record<string, ExpansionMetadata> = {
   DARKMOON_FAIRE: { name: 'Madness at the Darkmoon Faire', year: 'Year of the Phoenix', yearNum: 2020 },
   SCHOLOMANCE: { name: 'Scholomance Academy', year: 'Year of the Phoenix', yearNum: 2020 },
   BLACK_TEMPLE: { name: 'Ashes of Outland', year: 'Year of the Phoenix', yearNum: 2020 },
+  DEMON_HUNTER_INITIATE: { name: 'Demon Hunter Initiate', year: 'Year of the Phoenix', yearNum: 2020 },
   // Year of the Dragon (2019)
   DRAGONS: { name: 'Descent of Dragons', year: 'Year of the Dragon', yearNum: 2019 },
+  YEAR_OF_THE_DRAGON: { name: "Galakrond's Awakening", year: 'Year of the Dragon', yearNum: 2019 },
   ULDUM: { name: 'Saviors of Uldum', year: 'Year of the Dragon', yearNum: 2019 },
   DALARAN: { name: 'Rise of Shadows', year: 'Year of the Dragon', yearNum: 2019 },
   // Year of the Raven (2018)
@@ -102,11 +110,19 @@ const EXPANSION_METADATA: Record<string, ExpansionMetadata> = {
   UNGORO: { name: "Journey to Un'Goro", year: 'Year of the Mammoth', yearNum: 2017 },
   // Year of the Kraken (2016)
   GANGS: { name: 'Mean Streets of Gadgetzan', year: 'Year of the Kraken', yearNum: 2016 },
+  KARA: { name: 'One Night in Karazhan', year: 'Year of the Kraken', yearNum: 2016 },
   OG: { name: 'Whispers of the Old Gods', year: 'Year of the Kraken', yearNum: 2016 },
-  // Pre-year sets
+  // Pre-year sets (2015)
+  LOE: { name: 'The League of Explorers', year: 'Classic', yearNum: 2015 },
   TGT: { name: 'The Grand Tournament', year: 'Classic', yearNum: 2015 },
+  BRM: { name: 'Blackrock Mountain', year: 'Classic', yearNum: 2015 },
+  // Pre-year sets (2014)
   GVG: { name: 'Goblins vs Gnomes', year: 'Classic', yearNum: 2014 },
+  NAXX: { name: 'Curse of Naxxramas', year: 'Classic', yearNum: 2014 },
   EXPERT1: { name: 'Classic', year: 'Classic', yearNum: 2014 },
+  EVENT: { name: 'Event', year: 'Classic', yearNum: 2014 },
+  // Special sets
+  CORE: { name: 'Core', year: 'Rotating', yearNum: new Date().getFullYear() },
 };
 
 function humanizeSetCode(code: string): string {
@@ -116,17 +132,23 @@ function humanizeSetCode(code: string): string {
 const RELEASE_ORDER = new Map(Object.keys(EXPANSION_METADATA).map((k, i) => [k, i]));
 
 function sortExpansions(a: Expansion, b: Expansion): number {
+  if (a.code === 'CORE' && b.code !== 'CORE') return 1;
+  if (b.code === 'CORE' && a.code !== 'CORE') return -1;
   if (b.yearNum !== a.yearNum) return b.yearNum - a.yearNum;
   const ai = RELEASE_ORDER.get(a.code) ?? 999;
   const bi = RELEASE_ORDER.get(b.code) ?? 999;
   return ai - bi;
 }
 
-const EXCLUDED_SETS = new Set([
-  'CORE', 'VANILLA', 'LEGACY', 'PLACEHOLDER_202204', 'WONDERS',
-  'KARA', 'LOE', 'BRM', 'NAXX', 'PATH_OF_ARTHAS',
-  'DEMON_HUNTER_INITIATE', 'HERO_SKINS', 'EVENT', 'CATACLYSM', 'YEAR_OF_THE_DRAGON',
+const EXCLUDED_SETS = new Set(['HERO_SKINS', 'VANILLA', 'LEGACY', 'PLACEHOLDER_202204']);
+
+const NON_PACK_SETS = new Set([
+  'NAXX', 'BRM', 'LOE', 'KARA',
+  'PATH_OF_ARTHAS', 'DEMON_HUNTER_INITIATE', 'YEAR_OF_THE_DRAGON',
+  'WONDERS', 'EVENT',
 ]);
+
+const DEDUP_LOW_PRIORITY = new Set(['EVENT']);
 
 function deriveExpansionsFromDb(cardDb: CardDb): Expansion[] {
   const counts = new Map<string, { commons: number; rares: number; epics: number; legendaries: number }>();
@@ -157,6 +179,7 @@ function deriveExpansionsFromDb(cardDb: CardDb): Expansion[] {
       year: meta?.year ?? 'Unknown Year',
       yearNum: meta?.yearNum ?? currentYear,
       standard: false,
+      noPacks: NON_PACK_SETS.has(code),
       ...entry,
     });
   }
@@ -165,9 +188,23 @@ function deriveExpansionsFromDb(cardDb: CardDb): Expansion[] {
 }
 
 function applyStandardRotation(expansions: Expansion[]): Expansion[] {
-  const yearNums = [...new Set(expansions.map(e => e.yearNum))].sort((a, b) => b - a);
-  const standardYears = new Set(yearNums.slice(0, 2));
-  return expansions.map(e => ({ ...e, standard: standardYears.has(e.yearNum) }));
+  const yearNums = [...new Set(
+    expansions.filter(e => e.code !== 'CORE').map(e => e.yearNum)
+  )].sort((a, b) => b - a);
+
+  if (yearNums.length < 2) {
+    return expansions.map(e => ({ ...e, standard: true }));
+  }
+
+  const maxYear = yearNums[0];
+  const rotationDate = new Date(maxYear, 2, 15).getTime();
+  const preRotation = Date.now() < rotationDate;
+  const standardYears = new Set(yearNums.slice(0, preRotation ? 3 : 2));
+
+  return expansions.map(e => ({
+    ...e,
+    standard: e.code === 'CORE' || standardYears.has(e.yearNum),
+  }));
 }
 
 let cachedExpansions: Expansion[] | null = null;
@@ -187,10 +224,7 @@ function ensureCache(): Expansion[] {
     if (!cardDb) throw new Error('Card database not loaded. Call initExpansions() first.');
     let expansions = deriveExpansionsFromDb(cardDb);
     expansions = applyStandardRotation(expansions);
-    expansions.sort((a, b) => {
-      if (b.yearNum !== a.yearNum) return b.yearNum - a.yearNum;
-      return a.name.localeCompare(b.name);
-    });
+    expansions.sort(sortExpansions);
     cachedExpansions = expansions;
   }
   return cachedExpansions;
@@ -281,14 +315,37 @@ export async function fetchAndCacheCardDb(): Promise<CardDbRefreshResult> {
   const db: CardDb = {};
   const validRarities = new Set(['COMMON', 'RARE', 'EPIC', 'LEGENDARY']);
 
-  for (const card of cards) {
+  const coreCards: Record<string, unknown>[] = [];
+  const idToDbfId = new Map<string, string>();
+  const seenNames = new Map<string, string>();
+
+  const sortedCards = [...cards].sort((a, b) => {
+    const pa = DEDUP_LOW_PRIORITY.has(a.set as string) ? 1 : 0;
+    const pb = DEDUP_LOW_PRIORITY.has(b.set as string) ? 1 : 0;
+    return pa - pb;
+  });
+
+  for (const card of sortedCards) {
     if (EXCLUDED_SETS.has(card.set as string)) continue;
     if (!validRarities.has(card.rarity as string)) continue;
+    if (card.set === 'CORE') { coreCards.push(card); continue; }
+    const name = card.name as string;
+    const dbfId = String(card.dbfId);
+
+    if (seenNames.has(name)) {
+      const canonicalDbfId = seenNames.get(name)!;
+      if (db[canonicalDbfId]) {
+        if (!db[canonicalDbfId].aliasDbfIds) db[canonicalDbfId].aliasDbfIds = [];
+        db[canonicalDbfId].aliasDbfIds.push(dbfId);
+      }
+      continue;
+    }
+
     const entry: CardDbEntry = {
       id: card.id as string,
       set: card.set as string,
       rarity: card.rarity as CardDbEntry['rarity'],
-      name: card.name as string,
+      name,
       type: (card.type as string) || 'MINION',
       cardClass: (card.cardClass as string) || ((card.classes as string[])?.[0]) || 'NEUTRAL',
       cost: (card.cost as number) ?? 0,
@@ -300,7 +357,35 @@ export async function fetchAndCacheCardDb(): Promise<CardDbRefreshResult> {
     if (card.howToEarnGolden) entry.freeGolden = true;
     if (card.hasDiamondSkin) entry.hasDiamond = true;
     if (signatureIds.has(entry.id)) entry.hasSignature = true;
-    db[String(card.dbfId)] = entry;
+    seenNames.set(name, dbfId);
+    db[dbfId] = entry;
+    idToDbfId.set(entry.id, dbfId);
+  }
+
+  for (const card of coreCards) {
+    const name = card.name as string;
+    const coreDbfId = String(card.dbfId);
+    const entry: CardDbEntry = {
+      id: card.id as string,
+      set: 'CORE',
+      rarity: card.rarity as CardDbEntry['rarity'],
+      name,
+      type: (card.type as string) || 'MINION',
+      cardClass: (card.cardClass as string) || ((card.classes as string[])?.[0]) || 'NEUTRAL',
+      cost: (card.cost as number) ?? 0,
+      attack: card.attack as number | undefined,
+      health: card.health as number | undefined,
+      text: card.text as string | undefined,
+    };
+    if (card.howToEarn) entry.freeNormal = true;
+    if (card.howToEarnGolden) entry.freeGolden = true;
+    db[coreDbfId] = entry;
+
+    const expansionDbfId = seenNames.get(name);
+    if (expansionDbfId && db[expansionDbfId]) {
+      if (!db[expansionDbfId].aliasDbfIds) db[expansionDbfId].aliasDbfIds = [];
+      db[expansionDbfId].aliasDbfIds.push(coreDbfId);
+    }
   }
 
   const changedCardIds: string[] = [];

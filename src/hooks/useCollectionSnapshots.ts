@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../stores/store.ts'
 import type { CollectionSnapshot } from '../types.ts'
-import { api } from '../services/api.ts'
+import { api, getAuthTier } from '../services/api.ts'
 
 let snapshotCache: CollectionSnapshot[] | null = null
 
@@ -58,6 +58,7 @@ export function useCollectionSnapshots() {
       return
     }
 
+    if (getAuthTier() === 'collection') return
     if (!collectionSyncedAt || !collection || expansions.length === 0) return
 
     const cards = getEnrichedCards()
@@ -107,6 +108,8 @@ export function useCollectionSnapshots() {
         const diff = buildDiffMessage(prev, snapshot)
         if (diff) {
           addToast(`Since last sync: ${diff}`, 'success')
+        } else {
+          return
         }
       }
 

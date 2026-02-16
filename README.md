@@ -82,7 +82,7 @@ Your session cookie is stored locally in your browser and never sent to any thir
 
 ## Tech Stack
 
-React 19, Vite 6, Express 5, Tailwind CSS 4, Zustand 5, Recharts 2, TypeScript 5, Puppeteer (Cloudflare bypass)
+React 19, Vite 6, Express 5, Tailwind CSS 4, Zustand 5, Recharts 2, TypeScript 5
 
 ## License
 

@@ -4,6 +4,8 @@ import { useStore } from '../stores/store.ts'
 import { loadSnapshots, clearSnapshots } from '../hooks/useCollectionSnapshots.ts'
 import { Dropdown } from '../components/FilterBar.tsx'
 import type { CollectionSnapshot } from '../types.ts'
+import { NavLink } from 'react-router-dom'
+import { HistoryIcon } from '../components/Icons.tsx'
 
 const TOOLTIP_STYLE = {
   contentStyle: {
@@ -30,7 +32,7 @@ function formatDate(ts: number): string {
   return new Date(ts).toLocaleDateString('en', { month: 'short', day: 'numeric' })
 }
 
-export default function HistoryView() {
+function HistoryContent() {
   const expansions = useStore(s => s.expansions)
   const [timeRange, setTimeRange] = useState<TimeRange>('all')
   const [selectedExpansion, setSelectedExpansion] = useState('')
@@ -122,7 +124,6 @@ export default function HistoryView() {
         <span className="text-xs text-gray-500 ml-auto">{filtered.length} snapshots</span>
       </div>
 
-      {/* Dust Balance */}
       <div className="bg-white/5 rounded-lg border border-white/10 p-4">
         <h3 className="text-sm font-bold text-gray-300 mb-3">Dust Balance</h3>
         <ResponsiveContainer width="100%" height={200}>
@@ -135,7 +136,6 @@ export default function HistoryView() {
         </ResponsiveContainer>
       </div>
 
-      {/* Completion % */}
       <div className="bg-white/5 rounded-lg border border-white/10 p-4">
         <h3 className="text-sm font-bold text-gray-300 mb-3">Collection Completion</h3>
         <ResponsiveContainer width="100%" height={250}>
@@ -151,7 +151,6 @@ export default function HistoryView() {
         </ResponsiveContainer>
       </div>
 
-      {/* Per-Expansion */}
       <div className="bg-white/5 rounded-lg border border-white/10 p-4">
         <div className="flex items-center gap-3 mb-3">
           <h3 className="text-sm font-bold text-gray-300">Expansion Progress</h3>
@@ -177,7 +176,6 @@ export default function HistoryView() {
         )}
       </div>
 
-      {/* Clear */}
       <div>
         {confirmClear ? (
           <div className="flex items-center gap-3">
@@ -206,4 +204,30 @@ export default function HistoryView() {
       </div>
     </div>
   )
+}
+
+export default function HistoryView() {
+  const authTier = useStore(s => s.authTier)
+
+  if (authTier === 'collection') {
+    return (
+      <div className="p-6 max-w-lg">
+        <h1 className="text-xl font-bold text-gold mb-6">Collection History</h1>
+        <div className="bg-white/5 rounded-lg border border-white/10 p-6 text-center space-y-4">
+          <HistoryIcon size={32} className="mx-auto text-gray-500" />
+          <p className="text-gray-400 text-sm">
+            Collection history requires a full account connection.
+          </p>
+          <NavLink
+            to="/settings"
+            className="inline-block px-4 py-2 bg-gold/20 text-gold border border-gold/30 rounded-lg text-sm font-medium hover:bg-gold/30 transition-colors"
+          >
+            Upgrade in Settings
+          </NavLink>
+        </div>
+      </div>
+    )
+  }
+
+  return <HistoryContent />
 }

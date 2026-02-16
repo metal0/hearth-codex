@@ -375,7 +375,7 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
         </button>
 
         <div className="shrink-0 p-6 flex flex-col items-center gap-3">
-          <div className="w-[240px] h-[340px] relative overflow-hidden rounded-lg shadow-lg bg-black/30">
+          <div className="w-[312px] h-[442px] relative overflow-hidden rounded-lg shadow-lg bg-black/30">
             <img
               key={artVariant}
               src={artUrl}

@@ -99,6 +99,34 @@ function mergeMultiWordTokens(tokens: string[]): string[] {
   return result
 }
 
+export interface SearchFilters {
+  rarities: Set<Rarity>
+  ownership: 'all' | 'owned' | 'incomplete' | null
+  mode: 'normal' | 'golden' | 'signature' | 'diamond' | null
+}
+
+export function extractSearchFilters(query: string): SearchFilters {
+  const rarities = new Set<Rarity>()
+  let ownership: SearchFilters['ownership'] = null
+  let mode: SearchFilters['mode'] = null
+
+  if (!query.trim()) return { rarities, ownership, mode }
+
+  const rawTokens = query.toLowerCase().trim().split(/\s+/)
+  const tokens = mergeMultiWordTokens(rawTokens)
+
+  for (const token of tokens) {
+    if (token in RARITY_KEYWORDS) rarities.add(RARITY_KEYWORDS[token])
+    if (token === 'missing') ownership = 'incomplete'
+    if (token === 'owned') ownership = 'owned'
+    if (token === 'golden') mode = 'golden'
+    if (token === 'signature') mode = 'signature'
+    if (token === 'diamond') mode = 'diamond'
+  }
+
+  return { rarities, ownership, mode }
+}
+
 export function parseSearch(query: string): ParsedSearch {
   const predicates: CardPredicate[] = []
   const textParts: string[] = []

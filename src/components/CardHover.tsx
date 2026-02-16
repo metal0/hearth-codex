@@ -1,26 +1,34 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useStore } from '../stores/store.ts'
 
 interface CardHoverProps {
   id: string
   name: string
   className?: string
+  style?: React.CSSProperties
+  children?: React.ReactNode
 }
 
-export default function CardHover({ id, name, className }: CardHoverProps) {
+export default function CardHover({ id, name, className, style, children }: CardHoverProps) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
   const collectionMode = useStore(s => s.collectionMode)
   const av = useStore(s => s.artVersion)
 
+  useEffect(() => () => setPos(null), [])
+
   const handleEnter = useCallback((e: React.MouseEvent) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const viewportW = window.innerWidth
-    const imgW = 200
+    const viewportH = window.innerHeight
+    const imgW = 338
+    const imgH = 481
     const flipped = rect.right + imgW + 16 > viewportW
-    setPos({
-      x: flipped ? rect.left - imgW - 8 : rect.right + 8,
-      y: rect.top,
-    })
+    const x = flipped ? rect.left - imgW - 8 : rect.right + 8
+    let y = rect.top - imgH * 0.25
+    if (y + imgH > viewportH - 8) y = viewportH - imgH - 8
+    if (y < 8) y = 8
+    setPos({ x, y })
   }, [])
 
   const a = (v: string) => `/art/${id}_${v}.png?v=${av}`
@@ -33,22 +41,25 @@ export default function CardHover({ id, name, className }: CardHoverProps) {
   return (
     <span
       className={className}
+      style={style}
       onMouseEnter={handleEnter}
       onMouseLeave={() => setPos(null)}
     >
-      {name}
-      {pos && (
+      {children ?? name}
+      {pos && createPortal(
         <img
           src={imgUrl}
-          className="fixed z-[100] w-[200px] rounded-lg shadow-2xl pointer-events-none"
-          style={{ left: pos.x, top: pos.y, transform: 'translateY(-25%)' }}
-          alt={name}
+          className="fixed z-[9999] w-[338px] rounded-lg shadow-2xl pointer-events-none"
+          style={{ left: pos.x, top: pos.y }}
+          alt={name || id}
           onError={e => {
-            if (!(e.target as HTMLImageElement).src.includes('_normal.png')) {
-              (e.target as HTMLImageElement).src = baseUrl
+            const img = e.target as HTMLImageElement
+            if (!img.src.includes('_normal.png')) {
+              img.src = baseUrl
             }
           }}
-        />
+        />,
+        document.body,
       )}
     </span>
   )

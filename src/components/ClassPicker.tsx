@@ -63,9 +63,10 @@ interface ClassPickerProps {
   value: string
   onChange: (cls: string) => void
   label?: string
+  excludeNeutral?: boolean
 }
 
-export default function ClassPicker({ value, onChange, label = 'Class' }: ClassPickerProps) {
+export default function ClassPicker({ value, onChange, label = 'Class', excludeNeutral }: ClassPickerProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -106,7 +107,7 @@ export default function ClassPicker({ value, onChange, label = 'Class' }: ClassP
           >
             All Classes
           </button>
-          {HS_CLASSES.map(cls => (
+          {HS_CLASSES.filter(cls => !excludeNeutral || cls !== 'NEUTRAL').map(cls => (
             <button
               key={cls}
               onClick={() => { onChange(cls); setOpen(false) }}

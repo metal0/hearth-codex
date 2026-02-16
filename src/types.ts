@@ -13,6 +13,7 @@ export interface CardDbEntry {
   freeGolden?: boolean;
   hasSignature?: boolean;
   hasDiamond?: boolean;
+  aliasDbfIds?: string[];
 }
 
 export type CardDb = Record<string, CardDbEntry>;
@@ -23,6 +24,7 @@ export interface Expansion {
   year: string;
   yearNum: number;
   standard: boolean;
+  noPacks: boolean;
   commons: number;
   rares: number;
   epics: number;
@@ -34,6 +36,14 @@ export interface CollectionData {
   dust?: number;
   gold?: number;
   syncedAt?: number | null;
+}
+
+export interface MetaEntry {
+  dbfId: number;
+  popularity: number;
+  winrate: number;
+  decks: number;
+  class: string;
 }
 
 export interface SimulationResult {
@@ -101,10 +111,18 @@ export interface EnrichedCard {
   inclusionRate: number;
   winrate: number;
   decks: number;
+  inclusionRateStd: number;
+  winrateStd: number;
+  decksStd: number;
+  inclusionRateWild: number;
+  winrateWild: number;
+  decksWild: number;
   freeNormal?: boolean;
   freeGolden?: boolean;
   hasSignature?: boolean;
   hasDiamond?: boolean;
+  inCore?: boolean;
+  aliasDbfIds?: string[];
 }
 
 export interface CollectionSnapshot {
@@ -398,3 +416,91 @@ export const CLASS_COLORS: Record<string, string> = {
   WARRIOR: '#C69B6D',
   NEUTRAL: '#808080',
 };
+
+export interface BracketInfo {
+  key: string;
+  rankRange: string;
+  timeRange: string;
+  premium: boolean;
+  fetchedAt: number;
+  cardCount: number;
+  fresh: boolean;
+}
+
+export interface BracketsResponse {
+  brackets: BracketInfo[];
+  allBrackets: Array<{ key: string; rankRange: string; timeRange: string; premium: boolean; requiresSession: boolean }>;
+  lastPremiumFetchAt: number | null;
+}
+
+export const FREE_BRACKET = 'BRONZE_THROUGH_GOLD__CURRENT_PATCH';
+
+export const RANK_RANGE_LABELS: Record<string, string> = {
+  BRONZE_THROUGH_GOLD: 'Bronze - Gold',
+  DIAMOND_THROUGH_LEGEND: 'Diamond - Legend',
+  ALL: 'All Ranks',
+};
+
+export const TIME_RANGE_LABELS: Record<string, string> = {
+  CURRENT_PATCH: 'Current Patch',
+  CURRENT_EXPANSION: 'Current Expansion',
+  LAST_7_DAYS: 'Last 7 Days',
+  LAST_14_DAYS: 'Last 14 Days',
+};
+
+export function bracketLabel(key: string): string {
+  const [rank, time] = key.split('__');
+  return `${RANK_RANGE_LABELS[rank] ?? rank} / ${TIME_RANGE_LABELS[time] ?? time}`;
+}
+
+export interface ArchetypeInfo {
+  id: number;
+  name: string;
+  playerClass: string;
+  url: string;
+  pctOfTotal?: number;
+  winRate?: number;
+  totalGames?: number;
+  avgTurns?: number;
+  avgDuration?: number;
+  climbingSpeed?: number;
+}
+
+export interface DeckInfo {
+  deckId: string;
+  archetypeId: number;
+  playerClass: string;
+  winRate: number;
+  totalGames: number;
+  cards: [number, number][];
+  deckstring: string;
+  duration?: number;
+  sideboardPairs?: [number, number][];
+}
+
+export interface CompanionCard {
+  id: string;
+  name: string;
+  cost: number;
+  type: string;
+  set: string;
+  rarity: string;
+  cardClass: string;
+  ownerDbfId?: number;
+  sideboard?: boolean;
+}
+
+export interface HsguruMatchup {
+  opponentClass: string;
+  winRate: number;
+  totalGames: number;
+}
+
+export interface DecksResponse {
+  archetypes: ArchetypeInfo[];
+  decks: DeckInfo[];
+  companionCards: Record<string, CompanionCard>;
+  fetchedAt: number;
+  source?: 'hsreplay' | 'hsguru';
+}
+

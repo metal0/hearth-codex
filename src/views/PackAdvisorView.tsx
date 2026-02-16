@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../stores/store.ts'
-import { DUST_COST, RARITY_COLORS, getSignatureAcquisition } from '../types.ts'
-import { RarityGem, DustIcon, StandardIcon, WildIcon, ExpansionPackIcon } from '../components/Icons.tsx'
+import { DUST_COST, RARITY_COLORS, getSignatureAcquisition, bracketLabel } from '../types.ts'
+import { DustIcon, StandardIcon, WildIcon, ExpansionPackIcon } from '../components/Icons.tsx'
+import { CardCircle, RarityDot, rarityBleedStyle } from '../components/CardCircle.tsx'
 import type { EnrichedCard, Expansion, Rarity } from '../types.ts'
 import CardHover from '../components/CardHover.tsx'
 import CollectionModeToggle from '../components/CollectionModeToggle.tsx'
 import ClassPicker from '../components/ClassPicker.tsx'
 import RarityFilter from '../components/RarityFilter.tsx'
+import { useRotationInfo } from '../hooks/useRotationInfo.ts'
 
 const PACK_WEIGHT: Record<Rarity, number> = {
   COMMON: 0.7614,
@@ -39,9 +41,20 @@ const GOLDEN_CRAFT: Record<Rarity, number> = {
 const SIG_PER_PACK_EXPANSION = 0.05
 const SIG_PER_PACK_OTHER = 0.006
 
+const ROTATION_DECAY_DAYS = 365
+
+// First-10 legendary guarantee: expected ~8.06 packs vs ~20.4 normal = 2.5x boost
+const FIRST_10_BOOST = 2.5
+
+function rotationMultiplier(daysLeft: number): number {
+  if (daysLeft >= ROTATION_DECAY_DAYS) return 1
+  return Math.max(0.1, 0.1 + 0.9 * (daysLeft / ROTATION_DECAY_DAYS))
+}
+
 interface TopCard extends EnrichedCard {
   pullChance: number
   metaScore: number
+  rotating?: boolean
 }
 
 interface PackScore {
@@ -56,11 +69,13 @@ interface PackScore {
   dustPerPack: number
   craftCost: number
   topCards: TopCard[]
+  hasFirst10?: boolean
 }
 
-function computePullChance(rarity: Rarity, missingOfRarity: number): number {
+function computePullChance(rarity: Rarity, missingOfRarity: number, legendaryBoost = 1): number {
   if (missingOfRarity <= 0) return 0
-  const perSlot = PACK_WEIGHT[rarity] / missingOfRarity
+  const weight = PACK_WEIGHT[rarity] * (rarity === 'LEGENDARY' ? legendaryBoost : 1)
+  const perSlot = weight / missingOfRarity
   return 1 - Math.pow(1 - perSlot, 5)
 }
 
@@ -72,6 +87,8 @@ function scoreExpansionNormal(
   expansion: Expansion,
   missingMeta: EnrichedCard[],
   allMissingInSet: EnrichedCard[],
+  decay = 1,
+  legendaryBoost = 1,
 ): PackScore {
   const allMissingByRarity: Record<Rarity, number> = { COMMON: 0, RARE: 0, EPIC: 0, LEGENDARY: 0 }
   for (const card of allMissingInSet) allMissingByRarity[card.rarity]++
@@ -83,8 +100,8 @@ function scoreExpansionNormal(
   for (const card of missingMeta) {
     craftCost += DUST_COST[card.rarity] * (card.maxCopies - card.totalOwned)
     missingByRarity[card.rarity]++
-    const pull = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity]
+    const pull = computePullChance(card.rarity, allMissingByRarity[card.rarity], legendaryBoost)
+    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
   }
 
   let dustPerPack = 0
@@ -92,14 +109,16 @@ function scoreExpansionNormal(
     const total = rarityCount(expansion, rarity)
     if (total === 0) continue
     const missingRatio = allMissingByRarity[rarity] / total
-    dustPerPack += 5 * PACK_WEIGHT[rarity] * (missingRatio * DUST_COST[rarity] + (1 - missingRatio) * DISENCHANT_VALUE[rarity])
+    const weight = PACK_WEIGHT[rarity] * (rarity === 'LEGENDARY' ? legendaryBoost : 1)
+    dustPerPack += 5 * weight * (missingRatio * DUST_COST[rarity] + (1 - missingRatio) * DISENCHANT_VALUE[rarity])
   }
 
+  const isRotating = decay < 1
   const topCards: TopCard[] = [...missingMeta]
     .map(card => {
-      const pullChance = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity]
-      return { ...card, pullChance, metaScore }
+      const pullChance = computePullChance(card.rarity, allMissingByRarity[card.rarity], legendaryBoost)
+      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
+      return { ...card, pullChance, metaScore, rotating: isRotating }
     })
     .sort((a, b) => b.metaScore - a.metaScore)
     .slice(0, 10)
@@ -116,6 +135,7 @@ function scoreExpansionNormal(
     dustPerPack,
     craftCost,
     topCards,
+    hasFirst10: legendaryBoost > 1,
   }
 }
 
@@ -123,6 +143,8 @@ function scoreExpansionGolden(
   expansion: Expansion,
   missingMeta: EnrichedCard[],
   allMissingInSet: EnrichedCard[],
+  decay = 1,
+  legendaryBoost = 1,
 ): PackScore {
   const allMissingByRarity: Record<Rarity, number> = { COMMON: 0, RARE: 0, EPIC: 0, LEGENDARY: 0 }
   for (const card of allMissingInSet) allMissingByRarity[card.rarity]++
@@ -134,8 +156,8 @@ function scoreExpansionGolden(
   for (const card of missingMeta) {
     craftCost += GOLDEN_CRAFT[card.rarity] * (card.maxCopies - card.totalOwned)
     missingByRarity[card.rarity]++
-    const pull = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity]
+    const pull = computePullChance(card.rarity, allMissingByRarity[card.rarity], legendaryBoost)
+    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
   }
 
   let dustPerPack = 0
@@ -143,14 +165,16 @@ function scoreExpansionGolden(
     const total = rarityCount(expansion, rarity)
     if (total === 0) continue
     const missingRatio = allMissingByRarity[rarity] / total
-    dustPerPack += 5 * PACK_WEIGHT[rarity] * (missingRatio * DUST_COST[rarity] + (1 - missingRatio) * GOLDEN_DISENCHANT_VALUE[rarity])
+    const weight = PACK_WEIGHT[rarity] * (rarity === 'LEGENDARY' ? legendaryBoost : 1)
+    dustPerPack += 5 * weight * (missingRatio * DUST_COST[rarity] + (1 - missingRatio) * GOLDEN_DISENCHANT_VALUE[rarity])
   }
 
+  const isRotating = decay < 1
   const topCards: TopCard[] = [...missingMeta]
     .map(card => {
-      const pullChance = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity]
-      return { ...card, pullChance, metaScore }
+      const pullChance = computePullChance(card.rarity, allMissingByRarity[card.rarity], legendaryBoost)
+      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
+      return { ...card, pullChance, metaScore, rotating: isRotating }
     })
     .sort((a, b) => b.metaScore - a.metaScore)
     .slice(0, 10)
@@ -167,6 +191,7 @@ function scoreExpansionGolden(
     dustPerPack,
     craftCost,
     topCards,
+    hasFirst10: legendaryBoost > 1,
   }
 }
 
@@ -174,6 +199,7 @@ function scoreExpansionSignature(
   expansion: Expansion,
   missingMeta: EnrichedCard[],
   allMissingInSet: EnrichedCard[],
+  decay = 1,
 ): PackScore {
   const sigRate = SIG_PER_PACK_EXPANSION
   const missingLegs = allMissingInSet.filter(c => c.rarity === 'LEGENDARY' && getSignatureAcquisition(c.id, c.set, c.rarity).method === 'pack')
@@ -188,16 +214,17 @@ function scoreExpansionSignature(
     craftCost += GOLDEN_CRAFT.LEGENDARY
     missingByRarity.LEGENDARY++
     const perCardChance = missingLegCount > 0 ? sigRate / missingLegCount : 0
-    metaDustPerPack += perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY
+    metaDustPerPack += perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY * decay
   }
 
   const dustPerPack = missingLegCount > 0 ? sigRate * GOLDEN_CRAFT.LEGENDARY : 0
 
+  const isRotating = decay < 1
   const topCards: TopCard[] = [...metaLegs]
     .map(card => {
       const perCardChance = missingLegCount > 0 ? sigRate / missingLegCount : 0
-      const metaScore = perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY
-      return { ...card, pullChance: perCardChance, metaScore }
+      const metaScore = perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY * decay
+      return { ...card, pullChance: perCardChance, metaScore, rotating: isRotating }
     })
     .sort((a, b) => b.metaScore - a.metaScore)
     .slice(0, 10)
@@ -222,6 +249,7 @@ function scoreAggregateNormal(
   expansions: Expansion[],
   missingMetaBySet: Map<string, EnrichedCard[]>,
   allMissingBySet: Map<string, EnrichedCard[]>,
+  decayBySet?: Map<string, number>,
 ): PackScore {
   const missingByRarity: Record<Rarity, number> = { COMMON: 0, RARE: 0, EPIC: 0, LEGENDARY: 0 }
   const allMissingByRarity: Record<Rarity, number> = { COMMON: 0, RARE: 0, EPIC: 0, LEGENDARY: 0 }
@@ -251,7 +279,8 @@ function scoreAggregateNormal(
   let metaDustPerPack = 0
   for (const card of allMetaMissing) {
     const pull = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity]
+    const decay = decayBySet?.get(card.set) ?? 1
+    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
   }
 
   let dustPerPack = 0
@@ -264,8 +293,9 @@ function scoreAggregateNormal(
   const topCards: TopCard[] = allMetaMissing
     .map(card => {
       const pullChance = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity]
-      return { ...card, pullChance, metaScore }
+      const decay = decayBySet?.get(card.set) ?? 1
+      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
+      return { ...card, pullChance, metaScore, rotating: decay < 1 }
     })
     .sort((a, b) => b.metaScore - a.metaScore)
     .slice(0, 10)
@@ -290,6 +320,7 @@ function scoreAggregateGolden(
   expansions: Expansion[],
   missingMetaBySet: Map<string, EnrichedCard[]>,
   allMissingBySet: Map<string, EnrichedCard[]>,
+  decayBySet?: Map<string, number>,
 ): PackScore {
   const missingByRarity: Record<Rarity, number> = { COMMON: 0, RARE: 0, EPIC: 0, LEGENDARY: 0 }
   const allMissingByRarity: Record<Rarity, number> = { COMMON: 0, RARE: 0, EPIC: 0, LEGENDARY: 0 }
@@ -319,7 +350,8 @@ function scoreAggregateGolden(
   let metaDustPerPack = 0
   for (const card of allMetaMissing) {
     const pull = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity]
+    const decay = decayBySet?.get(card.set) ?? 1
+    metaDustPerPack += pull * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
   }
 
   let dustPerPack = 0
@@ -332,8 +364,9 @@ function scoreAggregateGolden(
   const topCards: TopCard[] = allMetaMissing
     .map(card => {
       const pullChance = computePullChance(card.rarity, allMissingByRarity[card.rarity])
-      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity]
-      return { ...card, pullChance, metaScore }
+      const decay = decayBySet?.get(card.set) ?? 1
+      const metaScore = pullChance * (card.inclusionRate / 100) * DUST_COST[card.rarity] * decay
+      return { ...card, pullChance, metaScore, rotating: decay < 1 }
     })
     .sort((a, b) => b.metaScore - a.metaScore)
     .slice(0, 10)
@@ -358,6 +391,7 @@ function scoreAggregateSignature(
   expansions: Expansion[],
   missingMetaBySet: Map<string, EnrichedCard[]>,
   allMissingBySet: Map<string, EnrichedCard[]>,
+  decayBySet?: Map<string, number>,
 ): PackScore {
   const sigRate = SIG_PER_PACK_OTHER
   const missingByRarity: Record<Rarity, number> = { COMMON: 0, RARE: 0, EPIC: 0, LEGENDARY: 0 }
@@ -380,7 +414,8 @@ function scoreAggregateSignature(
       craftCost += GOLDEN_CRAFT.LEGENDARY
       missingByRarity.LEGENDARY++
       const perCardChance = totalMissingLegs > 0 ? sigRate / totalMissingLegs : 0
-      metaDustPerPack += perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY
+      const decay = decayBySet?.get(card.set) ?? 1
+      metaDustPerPack += perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY * decay
     }
   }
 
@@ -389,8 +424,9 @@ function scoreAggregateSignature(
   const topCards: TopCard[] = metaLegs
     .map(card => {
       const perCardChance = totalMissingLegs > 0 ? sigRate / totalMissingLegs : 0
-      const metaScore = perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY
-      return { ...card, pullChance: perCardChance, metaScore }
+      const decay = decayBySet?.get(card.set) ?? 1
+      const metaScore = perCardChance * (card.inclusionRate / 100) * GOLDEN_CRAFT.LEGENDARY * decay
+      return { ...card, pullChance: perCardChance, metaScore, rotating: decay < 1 }
     })
     .sort((a, b) => b.metaScore - a.metaScore)
     .slice(0, 10)
@@ -418,6 +454,7 @@ export default function PackAdvisorView() {
   const metaWild = useStore(s => s.metaWild)
   const cardsLoading = useStore(s => s.cardsLoading)
   const collectionMode = useStore(s => s.collectionMode)
+  const metaBracket = useStore(s => s.metaBracket)
   const [formatFilter, setFormatFilter] = useState<'standard' | 'wild'>('standard')
   const [selectedClass, setSelectedClass] = useState('')
   const [selectedRarities, setSelectedRarities] = useState<Rarity[]>([])
@@ -428,10 +465,19 @@ export default function PackAdvisorView() {
   const isGoldenMode = collectionMode === 'golden' || collectionMode === 'signature'
   const isSigMode = collectionMode === 'signature'
 
+  const rotationInfo = useRotationInfo(expansions)
+
   const scores = useMemo(() => {
-    const all = getEnrichedCards()
-    let missingMeta = all.filter(c => c.totalOwned < c.maxCopies && c.inclusionRate > 0)
-    let allMissing = all.filter(c => c.totalOwned < c.maxCopies)
+    const all = getEnrichedCards().map(c => {
+      if (formatFilter === 'wild') {
+        return { ...c, inclusionRate: c.inclusionRateWild, winrate: c.winrateWild, decks: c.decksWild }
+      }
+      return { ...c, inclusionRate: c.inclusionRateStd, winrate: c.winrateStd, decks: c.decksStd }
+    })
+    const noPackCodes = new Set(expansions.filter(e => e.noPacks).map(e => e.code))
+    const isPackCard = (c: EnrichedCard) => c.set !== 'CORE' && !noPackCodes.has(c.set) && !c.freeNormal
+    let missingMeta = all.filter(c => c.totalOwned < c.maxCopies && c.inclusionRate > 0 && isPackCard(c))
+    let allMissing = all.filter(c => c.totalOwned < c.maxCopies && isPackCard(c))
 
     if (selectedClass) {
       missingMeta = missingMeta.filter(c => c.cardClass === selectedClass || c.cardClass === 'NEUTRAL')
@@ -457,15 +503,30 @@ export default function PackAdvisorView() {
       allMissingBySet.set(card.set, list)
     }
 
-    const filteredExpansions = formatFilter === 'standard'
+    const filteredExpansions = (formatFilter === 'standard'
       ? expansions.filter(e => e.standard)
       : expansions.filter(e => !e.standard)
+    ).filter(e => e.code !== 'CORE' && !e.noPacks)
+
+    const decayBySet = new Map<string, number>()
+    if (formatFilter === 'standard' && rotationInfo) {
+      const mult = rotationMultiplier(rotationInfo.daysLeft)
+      for (const code of rotationInfo.rotatingCodes) decayBySet.set(code, mult)
+    }
+    const getDecay = (code: string) => decayBySet.get(code) ?? 1
+
+    const first10Sets = new Set<string>()
+    for (const exp of filteredExpansions) {
+      const hasLegendary = all.some(c => c.set === exp.code && c.rarity === 'LEGENDARY' && c.totalOwned > 0)
+      if (!hasLegendary) first10Sets.add(exp.code)
+    }
+    const getLegBoost = (code: string) => first10Sets.has(code) ? FIRST_10_BOOST : 1
 
     const scoreExpansion = isSigMode
-      ? (exp: Expansion) => scoreExpansionSignature(exp, bySet.get(exp.code) ?? [], allMissingBySet.get(exp.code) ?? [])
+      ? (exp: Expansion) => scoreExpansionSignature(exp, bySet.get(exp.code) ?? [], allMissingBySet.get(exp.code) ?? [], getDecay(exp.code))
       : isGoldenMode
-        ? (exp: Expansion) => scoreExpansionGolden(exp, bySet.get(exp.code) ?? [], allMissingBySet.get(exp.code) ?? [])
-        : (exp: Expansion) => scoreExpansionNormal(exp, bySet.get(exp.code) ?? [], allMissingBySet.get(exp.code) ?? [])
+        ? (exp: Expansion) => scoreExpansionGolden(exp, bySet.get(exp.code) ?? [], allMissingBySet.get(exp.code) ?? [], getDecay(exp.code), getLegBoost(exp.code))
+        : (exp: Expansion) => scoreExpansionNormal(exp, bySet.get(exp.code) ?? [], allMissingBySet.get(exp.code) ?? [], getDecay(exp.code), getLegBoost(exp.code))
 
     const expScores = filteredExpansions
       .map(scoreExpansion)
@@ -485,10 +546,10 @@ export default function PackAdvisorView() {
     }
 
     const aggregate = isSigMode
-      ? scoreAggregateSignature(aggregateLabel, filteredExpansions, filteredMetaBySet, filteredAllBySet)
+      ? scoreAggregateSignature(aggregateLabel, filteredExpansions, filteredMetaBySet, filteredAllBySet, decayBySet.size > 0 ? decayBySet : undefined)
       : isGoldenMode
-        ? scoreAggregateGolden(aggregateLabel, filteredExpansions, filteredMetaBySet, filteredAllBySet)
-        : scoreAggregateNormal(aggregateLabel, filteredExpansions, filteredMetaBySet, filteredAllBySet)
+        ? scoreAggregateGolden(aggregateLabel, filteredExpansions, filteredMetaBySet, filteredAllBySet, decayBySet.size > 0 ? decayBySet : undefined)
+        : scoreAggregateNormal(aggregateLabel, filteredExpansions, filteredMetaBySet, filteredAllBySet, decayBySet.size > 0 ? decayBySet : undefined)
 
     const result = [...expScores]
     if (aggregate.missingMetaCards > 0) result.push(aggregate)
@@ -504,7 +565,7 @@ export default function PackAdvisorView() {
       }
     })
     return result
-  }, [getEnrichedCards, expansions, formatFilter, selectedClass, selectedRarities, collection, metaStandard, metaWild, collectionMode, sortCol, sortAsc, isGoldenMode, isSigMode])
+  }, [getEnrichedCards, expansions, formatFilter, selectedClass, selectedRarities, collection, metaStandard, metaWild, collectionMode, sortCol, sortAsc, isGoldenMode, isSigMode, rotationInfo])
 
   function handleSort(col: typeof sortCol) {
     if (sortCol === col) setSortAsc(!sortAsc)
@@ -538,7 +599,10 @@ export default function PackAdvisorView() {
 
   return (
     <div className="p-6 max-w-5xl">
-      <h1 className="text-xl font-bold text-gold mb-6">Packs</h1>
+      <div className="flex items-baseline gap-3 mb-6">
+        <h1 className="text-xl font-bold text-gold">Packs</h1>
+        <span className="text-xs text-gray-500">Stats: <span className="text-gray-400">{bracketLabel(metaBracket)}</span></span>
+      </div>
 
       <div className="flex flex-wrap gap-3 mb-4 items-center">
         <div className="flex rounded overflow-hidden border border-white/10">
@@ -672,6 +736,26 @@ export default function PackAdvisorView() {
                           : <ExpansionPackIcon code={score.code} size={28} golden={isGoldenMode} />
                         }
                         <span>{isGoldenMode && !score.isAggregate ? `Golden ${score.name}` : score.name}</span>
+                        {!score.isAggregate && rotationInfo && rotationInfo.daysLeft <= 60 && rotationInfo.rotatingCodes.has(score.code) && (
+                          <span
+                            className="shrink-0 text-orange-400 cursor-help"
+                            title={`Rotating ~${rotationInfo.monthStr} (${rotationInfo.daysLeft}d) — meta value reduced by ${Math.round((1 - rotationMultiplier(rotationInfo.daysLeft)) * 100)}%`}
+                          >
+                            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                              <line x1="12" y1="9" x2="12" y2="13" />
+                              <line x1="12" y1="17" x2="12.01" y2="17" />
+                            </svg>
+                          </span>
+                        )}
+                        {score.hasFirst10 && (
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/15 text-green-400 font-normal"
+                            title="First-10 guarantee: 2.5x legendary pull rate (0 legendaries owned from this set)"
+                          >
+                            FIRST-10
+                          </span>
+                        )}
                         {score.isAggregate && (
                           <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-gold/15 text-gold/80 font-normal">
                             MIXED
@@ -694,10 +778,23 @@ export default function PackAdvisorView() {
                             <span className="w-12 text-right">Score</span>
                           </div>
                           {score.topCards.map(card => (
-                            <div key={card.dbfId} className="flex items-center gap-2 text-xs py-0.5">
-                              <RarityGem size={10} rarity={card.rarity} />
-                              <span className="flex items-center gap-1 truncate flex-1">
-                                <CardHover id={card.id} name={card.name} className="text-gray-300 truncate" />
+                            <div key={card.dbfId} className="flex items-center gap-2 text-xs py-1 relative overflow-hidden" style={{ height: 36 }}>
+                              {rarityBleedStyle(card.rarity) && <div style={rarityBleedStyle(card.rarity)!} />}
+                              <CardCircle id={card.id} rarity={card.rarity} size={28} className="relative z-[2]" />
+                              <span className="flex items-center gap-1 truncate flex-1 relative z-[2]">
+                                <CardHover id={card.id} name={card.name} className="text-gray-300 truncate" style={{ textShadow: '0 0 4px #000, 0 0 4px #000' }} />
+                                {card.rotating && rotationInfo && rotationInfo.daysLeft <= 60 && (
+                                  <span
+                                    className="shrink-0 text-orange-400 cursor-help"
+                                    title={`Rotating ~${rotationInfo.monthStr} (${rotationInfo.daysLeft}d) — meta value reduced by ${Math.round((1 - rotationMultiplier(rotationInfo.daysLeft)) * 100)}%`}
+                                  >
+                                    <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                                      <line x1="12" y1="9" x2="12" y2="13" />
+                                      <line x1="12" y1="17" x2="12.01" y2="17" />
+                                    </svg>
+                                  </span>
+                                )}
                               </span>
                               <span className="text-green-400 w-14 text-right shrink-0">
                                 {card.inclusionRate.toFixed(2)}%
@@ -729,7 +826,7 @@ export default function PackAdvisorView() {
                           {(['LEGENDARY', 'EPIC', 'RARE', 'COMMON'] as Rarity[]).map(r =>
                             score.missingByRarity[r] > 0 ? (
                               <span key={r} className="flex items-center gap-0.5 text-[10px] font-medium" style={{ color: RARITY_COLORS[r] }}>
-                                <RarityGem size={10} rarity={r} />
+                                <RarityDot rarity={r} size={8} />
                                 {score.missingByRarity[r]}
                               </span>
                             ) : null
@@ -760,27 +857,51 @@ export default function PackAdvisorView() {
         </div>
       )}
 
-      <div className="mt-4 space-y-1.5">
-        {isSigMode ? (
-          <p className="text-[10px] text-gray-600">
-            <span className="text-gray-500">Meta / Pack</span> — expected meta-relevant signature value per golden pack.
-            Based on 5% signature rate (expansion golden) or 0.6% (standard/wild golden), weighted by played % and golden craft cost.
-          </p>
-        ) : (
-          <>
-            <p className="text-[10px] text-gray-600">
-              <span className="text-gray-500">Meta / Pack</span> — expected meta-relevant dust saved per {packTypeLabel}.
-              Weights each missing card by played %, {isGoldenMode ? 'golden ' : ''}craft cost, and pull chance (with duplicate protection).
-            </p>
-            <p className="text-[10px] text-gray-600">
-              <span className="text-gray-500">Avg / Pack</span> — expected dust value per {packTypeLabel}. New cards save their {isGoldenMode ? 'golden ' : ''}craft cost, duplicates give {isGoldenMode ? 'golden ' : ''}disenchant value.
-            </p>
-            <p className="text-[10px] text-gray-600">
-              <span className="text-gray-500">Score</span> — per-card meta value: pull chance &times; played % &times; {isGoldenMode ? 'golden ' : ''}craft cost.
-            </p>
-          </>
-        )}
-      </div>
+      <details className="mt-6 bg-white/5 rounded-lg border border-white/10">
+        <summary className="px-4 py-3 text-xs text-gray-400 cursor-pointer hover:text-gray-300 select-none">
+          How are these calculations done?
+        </summary>
+        <div className="px-4 pb-4 space-y-3 text-xs text-gray-400 leading-relaxed">
+          <div>
+            <span className="text-gray-300 font-medium">Meta / Pack</span> — Expected meta-relevant dust
+            saved per pack. For each missing meta card: pull chance &times; played % &times; craft cost.
+            Higher values mean more meta-relevant cards you're likely to pull.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Avg / Pack</span> — Expected dust value per pack.
+            Pulling a missing card saves its craft cost. Pulling a duplicate yields its disenchant value.
+            Weighted by rarity distribution (76% Common, 15.5% Rare, 4.3% Epic, 1% Legendary).
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Pull chance</span> — Probability of pulling a
+            specific card from a pack. Uses Hearthstone's duplicate protection: each card slot can only
+            give you a card you're missing (until all cards of that rarity are owned). Calculated as
+            1&minus;(1&minus;weight/pool)^5 across 5 card slots.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">First-10 guarantee</span> — If you own 0
+            legendaries from an expansion, you're guaranteed one within the first 10 packs (vs 40 normally).
+            This gives a ~2.5x boost to legendary pull rates, shown with a
+            {' '}<span className="text-green-400">FIRST-10</span> badge.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Rotation decay</span> — Cards from sets
+            rotating out of Standard have their meta value gradually reduced starting 1 year before rotation
+            (0% penalty at 365d, scaling to 90% penalty at 1d). Orange warning icons appear when &le;60 days remain.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Aggregate packs</span> — Standard/Wild packs
+            randomly select an expansion, so their pool is all missing cards across all eligible sets.
+            The first-10 guarantee doesn't apply to aggregate scoring since each expansion has its own pity timer.
+          </div>
+          <div>
+            <span className="text-gray-300 font-medium">Collection modes</span> — Normal mode uses
+            standard craft/DE values. Golden mode uses golden craft/DE values. Signature mode
+            scores by signature drop rate (5% per expansion golden pack, 0.6% per standard/wild golden pack)
+            for pack-obtainable legendaries only.
+          </div>
+        </div>
+      </details>
     </div>
   )
 }

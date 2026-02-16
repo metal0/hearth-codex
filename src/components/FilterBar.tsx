@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { useStore } from '../stores/store.ts'
-import type { OwnershipFilter, ObtainabilityFilter, FormatFilter, SortOption } from '../types.ts'
+import type { OwnershipFilter, ObtainabilityFilter, FormatFilter, SortOption, Rarity, CollectionMode } from '../types.ts'
 import CollectionModeToggle from './CollectionModeToggle.tsx'
 import ClassPicker from './ClassPicker.tsx'
 import RarityFilter from './RarityFilter.tsx'
 import { StandardIcon, WildIcon } from './Icons.tsx'
+import { extractSearchFilters } from '../utils/searchParser.ts'
 
 const OWNERSHIP_OPTIONS: { value: OwnershipFilter; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -86,6 +87,12 @@ export function Dropdown({ label, options, value, onChange }: {
   )
 }
 
+interface PrevSearchState {
+  rarities: Set<Rarity>
+  ownership: OwnershipFilter | null
+  mode: CollectionMode | null
+}
+
 export default function FilterBar() {
   const {
     selectedSets, selectedClasses, selectedRarities,
@@ -93,7 +100,54 @@ export default function FilterBar() {
     expansions, collectionMode,
     setSelectedSets, setSelectedClasses, setSelectedRarities,
     setOwnershipFilter, setObtainabilityFilter, setFormatFilter, setSearchText, setSortBy, toggleSortDirection,
+    setCollectionMode,
+    filtersExpanded, toggleFilters,
+    showHeatmap, toggleHeatmap,
   } = useStore()
+
+  const prevSearchFilters = useRef<PrevSearchState>({ rarities: new Set(), ownership: null, mode: null })
+  const preSearchOwnership = useRef<OwnershipFilter | null>(null)
+  const preSearchMode = useRef<CollectionMode | null>(null)
+
+  useEffect(() => {
+    const next = extractSearchFilters(searchText)
+    const prev = prevSearchFilters.current
+
+    const toAddRarities = [...next.rarities].filter(r => !prev.rarities.has(r))
+    const toRemoveRarities = [...prev.rarities].filter(r => !next.rarities.has(r))
+    if (toAddRarities.length > 0 || toRemoveRarities.length > 0) {
+      const current = new Set(useStore.getState().selectedRarities)
+      for (const r of toAddRarities) current.add(r)
+      for (const r of toRemoveRarities) current.delete(r)
+      setSelectedRarities([...current])
+    }
+
+    if (next.ownership !== prev.ownership) {
+      if (next.ownership && !prev.ownership) {
+        preSearchOwnership.current = useStore.getState().ownershipFilter
+        setOwnershipFilter(next.ownership)
+      } else if (!next.ownership && prev.ownership) {
+        setOwnershipFilter(preSearchOwnership.current ?? 'all')
+        preSearchOwnership.current = null
+      } else if (next.ownership) {
+        setOwnershipFilter(next.ownership)
+      }
+    }
+
+    if (next.mode !== prev.mode) {
+      if (next.mode && !prev.mode) {
+        preSearchMode.current = useStore.getState().collectionMode
+        setCollectionMode(next.mode)
+      } else if (!next.mode && prev.mode) {
+        setCollectionMode(preSearchMode.current ?? 'normal')
+        preSearchMode.current = null
+      } else if (next.mode) {
+        setCollectionMode(next.mode)
+      }
+    }
+
+    prevSearchFilters.current = { rarities: next.rarities, ownership: next.ownership, mode: next.mode }
+  }, [searchText, setSelectedRarities, setOwnershipFilter, setCollectionMode])
 
   const setOptions = [
     { value: '', label: 'All Sets' },
@@ -104,112 +158,156 @@ export default function FilterBar() {
   ]
 
   return (
-    <div className="sticky top-0 z-10 bg-navy/95 backdrop-blur-sm border-b border-white/10 px-4 py-3 flex flex-wrap gap-2 items-center">
-      <div className="relative w-48">
-        <input
-          type="text"
-          placeholder="Search..."
-          value={searchText}
-          onChange={e => setSearchText(e.target.value)}
-          className="bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm w-full pr-7
-                     placeholder:text-gray-500 focus:outline-none focus:border-gold/50"
-        />
-        {searchText && (
-          <button
-            onClick={() => setSearchText('')}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-gray-500 hover:text-gray-300 transition-colors"
-          >
-            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        )}
-      </div>
+    <div className="sticky top-0 z-10 bg-navy/95 backdrop-blur-sm border-b border-white/10">
+      {/* Always-visible row */}
+      <div className="px-4 py-3 flex items-center gap-2">
+        <button
+          onClick={toggleFilters}
+          title={filtersExpanded ? 'Hide filters' : 'Show filters'}
+          className={`p-1.5 rounded border transition-colors ${
+            filtersExpanded
+              ? 'bg-gold/15 text-gold border-gold/30'
+              : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10 hover:text-gray-300'
+          }`}
+        >
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="6" y1="12" x2="18" y2="12" />
+            <line x1="8" y1="18" x2="16" y2="18" />
+          </svg>
+        </button>
 
-      <div className="flex rounded overflow-hidden border border-white/10">
-        {FORMAT_OPTIONS.map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => setFormatFilter(opt.value)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs transition-colors ${
-              formatFilter === opt.value
-                ? 'bg-gold/20 text-gold'
-                : 'bg-white/5 text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {opt.value === 'standard' ? <StandardIcon size={12} /> : <WildIcon size={12} />}
-            {opt.label}
-          </button>
-        ))}
-      </div>
+        <div className={`relative transition-all duration-200 ${filtersExpanded ? 'w-48' : 'w-72'}`}>
+          <input
+            type="text"
+            placeholder="Search cards..."
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            className="bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm w-full pr-7
+                       placeholder:text-gray-500 focus:outline-none focus:border-gold/50"
+          />
+          {searchText && (
+            <button
+              onClick={() => setSearchText('')}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
 
-      <CollectionModeToggle modes={['normal', 'golden', 'signature', 'diamond']} />
-
-      <RarityFilter selected={selectedRarities} onChange={setSelectedRarities} />
-
-      <div className="flex rounded overflow-hidden border border-white/10">
-        {OWNERSHIP_OPTIONS.map(opt => (
-          <button
-            key={opt.value}
-            onClick={() => setOwnershipFilter(opt.value)}
-            className={`px-2.5 py-1.5 text-xs transition-colors ${
-              ownershipFilter === opt.value
-                ? 'bg-mana/20 text-mana'
-                : 'bg-white/5 text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-      {(collectionMode === 'signature' || collectionMode === 'diamond') && (
         <div className="flex rounded overflow-hidden border border-white/10">
-          {OBTAINABILITY_OPTIONS.map(opt => (
+          {FORMAT_OPTIONS.map(opt => (
             <button
               key={opt.value}
-              onClick={() => setObtainabilityFilter(opt.value)}
-              className={`px-2.5 py-1.5 text-xs transition-colors ${
-                obtainabilityFilter === opt.value
-                  ? 'bg-emerald-500/20 text-emerald-400'
+              onClick={() => setFormatFilter(opt.value)}
+              className={`flex items-center gap-1.5 px-4 py-2 text-sm transition-colors ${
+                formatFilter === opt.value
+                  ? 'bg-gold/20 text-gold'
                   : 'bg-white/5 text-gray-400 hover:text-gray-200'
               }`}
             >
+              {opt.value === 'standard' ? <StandardIcon size={12} /> : <WildIcon size={12} />}
               {opt.label}
             </button>
           ))}
         </div>
-      )}
 
-      <Dropdown
-        label="Set"
-        options={setOptions}
-        value={selectedSets.length === 1 ? selectedSets[0] : ''}
-        onChange={v => setSelectedSets(v ? [v] : [])}
-      />
-
-      <ClassPicker
-        value={selectedClasses.length === 1 ? selectedClasses[0] : ''}
-        onChange={v => setSelectedClasses(v ? [v] : [])}
-      />
-
-      <div className="flex items-center gap-1 ml-auto">
-        <Dropdown
-          label="Sort"
-          options={SORT_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
-          value={sortBy}
-          onChange={v => setSortBy(v as SortOption)}
-        />
-        <button
-          onClick={toggleSortDirection}
-          className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-400
-                     hover:bg-white/10 hover:text-white transition-colors"
-          title={sortAsc ? 'Ascending' : 'Descending'}
-        >
-          {sortAsc ? '\u2191' : '\u2193'}
-        </button>
+        <div className="flex items-center gap-1 ml-auto">
+          <Dropdown
+            label="Sort"
+            options={SORT_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+            value={sortBy}
+            onChange={v => setSortBy(v as SortOption)}
+          />
+          <button
+            onClick={toggleSortDirection}
+            className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-400
+                       hover:bg-white/10 hover:text-white transition-colors"
+            title={sortAsc ? 'Ascending' : 'Descending'}
+          >
+            {sortAsc ? '\u2191' : '\u2193'}
+          </button>
+        </div>
       </div>
+
+      {/* Collapsible filter section */}
+      {filtersExpanded && (
+        <div className="px-4 pb-3 flex flex-wrap gap-2 items-center border-t border-white/5 pt-2">
+          <CollectionModeToggle modes={['normal', 'golden', 'signature', 'diamond']} />
+
+          <RarityFilter selected={selectedRarities} onChange={setSelectedRarities} />
+
+          <div className="flex rounded overflow-hidden border border-white/10">
+            {OWNERSHIP_OPTIONS.map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setOwnershipFilter(opt.value)}
+                title={`Ownership: ${opt.label}`}
+                className={`px-2.5 py-1.5 text-xs transition-colors ${
+                  ownershipFilter === opt.value
+                    ? 'bg-mana/20 text-mana'
+                    : 'bg-white/5 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {(collectionMode === 'signature' || collectionMode === 'diamond') && (
+            <div className="flex rounded overflow-hidden border border-white/10">
+              {OBTAINABILITY_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setObtainabilityFilter(opt.value)}
+                  title={`Obtainability: ${opt.label}`}
+                  className={`px-2.5 py-1.5 text-xs transition-colors ${
+                    obtainabilityFilter === opt.value
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-white/5 text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <Dropdown
+            label="Set"
+            options={setOptions}
+            value={selectedSets.length === 1 ? selectedSets[0] : ''}
+            onChange={v => setSelectedSets(v ? [v] : [])}
+          />
+
+          <ClassPicker
+            value={selectedClasses.length === 1 ? selectedClasses[0] : ''}
+            onChange={v => setSelectedClasses(v ? [v] : [])}
+          />
+
+          <button
+            onClick={toggleHeatmap}
+            title="Toggle collection heatmap"
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
+              showHeatmap
+                ? 'bg-gold/15 text-gold border-gold/30'
+                : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10 hover:text-gray-300'
+            }`}
+          >
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" className="opacity-70">
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" />
+              <rect x="14" y="14" width="7" height="7" rx="1" />
+            </svg>
+            Heatmap
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -4,7 +4,7 @@ import FilterBar from '../components/FilterBar.tsx'
 import CardGrid from '../components/CardGrid.tsx'
 import CardModal from '../components/CardModal.tsx'
 import CollectionHeatmap from '../components/CollectionHeatmap.tsx'
-import { RARITY_COLORS, CLASS_COLORS, DUST_COST, HS_CLASSES } from '../types.ts'
+import { RARITY_COLORS, CLASS_COLORS, DUST_COST, HS_CLASSES, bracketLabel } from '../types.ts'
 import { DustIcon, RarityGem } from '../components/Icons.tsx'
 import type { Rarity, EnrichedCard, SortOption } from '../types.ts'
 
@@ -135,7 +135,7 @@ export default function CollectionView() {
   const collectionLoading = useStore(s => s.collectionLoading)
 
   const [selectedCard, setSelectedCard] = useState<EnrichedCard | null>(null)
-  const [showHeatmap, setShowHeatmap] = useState(false)
+  const showHeatmap = useStore(s => s.showHeatmap)
   const cards = useStore(s => s.cards)
   const collection = useStore(s => s.collection)
   const metaStandard = useStore(s => s.metaStandard)
@@ -150,6 +150,7 @@ export default function CollectionView() {
   const sortBy = useStore(s => s.sortBy)
   const sortAsc = useStore(s => s.sortAsc)
   const collectionMode = useStore(s => s.collectionMode)
+  const metaBracket = useStore(s => s.metaBracket)
 
   const obtainabilityFilter = useStore(s => s.obtainabilityFilter)
 
@@ -190,10 +191,11 @@ export default function CollectionView() {
     <div className="flex flex-col h-full">
       <FilterBar />
 
-      <div className="px-4 py-2 bg-navy/50 border-b border-white/5 flex gap-6 text-xs text-gray-400">
+      <div className="px-4 py-2 bg-navy/50 border-b border-white/5 flex items-center gap-6 text-xs text-gray-400">
         <span>
           Showing <span className="text-white font-medium">{filteredCards.length}</span> cards
         </span>
+        <span className="text-gray-500">Stats: <span className="text-gray-400">{bracketLabel(metaBracket)}</span></span>
         {!collectionLoading && (
           <>
             <span>
@@ -211,22 +213,6 @@ export default function CollectionView() {
             )}
           </>
         )}
-        <button
-          onClick={() => setShowHeatmap(h => !h)}
-          className={`ml-auto flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium border transition-colors ${
-            showHeatmap
-              ? 'bg-gold/15 text-gold border-gold/30'
-              : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10 hover:text-gray-300'
-          }`}
-        >
-          <svg width={14} height={14} viewBox="0 0 24 24" fill="currentColor" className="opacity-70">
-            <rect x="3" y="3" width="7" height="7" rx="1" />
-            <rect x="14" y="3" width="7" height="7" rx="1" />
-            <rect x="3" y="14" width="7" height="7" rx="1" />
-            <rect x="14" y="14" width="7" height="7" rx="1" />
-          </svg>
-          Heatmap
-        </button>
       </div>
 
       <div className="flex-1 overflow-auto p-4">

@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../stores/store.ts'
-import { RARITY_COLORS, DUST_COST, RARITY_ORDER, CLASS_COLORS } from '../types.ts'
-import { DustIcon, RarityGem, StandardIcon, WildIcon } from '../components/Icons.tsx'
+import { RARITY_COLORS, DUST_COST, RARITY_ORDER, CLASS_COLORS, bracketLabel } from '../types.ts'
+import { DustIcon, StandardIcon, WildIcon } from '../components/Icons.tsx'
+import { rarityBleedStyle } from '../components/CardCircle.tsx'
 import type { EnrichedCard, Rarity } from '../types.ts'
 import CardHover from '../components/CardHover.tsx'
 import CollectionModeToggle from '../components/CollectionModeToggle.tsx'
 import ClassPicker, { ClassIcon, classLabel } from '../components/ClassPicker.tsx'
 import RarityFilter from '../components/RarityFilter.tsx'
+import { Dropdown } from '../components/FilterBar.tsx'
 import { useRotationInfo } from '../hooks/useRotationInfo.ts'
 
 export default function CraftAdvisorView() {
@@ -15,30 +17,59 @@ export default function CraftAdvisorView() {
   const expansions = useStore(s => s.expansions)
   const cardsLoading = useStore(s => s.cardsLoading)
   const collectionMode = useStore(s => s.collectionMode)
+  const metaBracket = useStore(s => s.metaBracket)
   const craftQueue = useStore(s => s.craftQueue)
   const addToQueue = useStore(s => s.addToQueue)
   const removeFromQueue = useStore(s => s.removeFromQueue)
   const clearQueue = useStore(s => s.clearQueue)
 
-  const rotationInfo = useRotationInfo(expansions, 90)
+  const rotationInfo = useRotationInfo(expansions)
 
   const [formatFilter, setFormatFilter] = useState<'standard' | 'wild'>('standard')
   const [selectedSet, setSelectedSet] = useState('')
   const [selectedRarities, setSelectedRarities] = useState<Rarity[]>([])
   const [selectedClass, setSelectedClass] = useState('')
   const [onlyAffordable, setOnlyAffordable] = useState(false)
-  const [sortCol, setSortCol] = useState<'rarity' | 'dust' | 'name' | 'set' | 'inclusion' | 'winrate'>('inclusion')
+  const [sortCol, setSortCol] = useState<'rarity' | 'dust' | 'name' | 'set' | 'inclusion' | 'winrate' | 'value'>('value')
   const [sortAsc, setSortAsc] = useState(false)
   const [showQueue, setShowQueue] = useState(true)
   const [confirmClear, setConfirmClear] = useState(false)
 
   const dust = collection?.dust ?? 0
 
+  const ROTATION_DECAY_DAYS = 365
+
+  function rotationMultiplier(daysLeft: number): number {
+    if (daysLeft >= ROTATION_DECAY_DAYS) return 1
+    return Math.max(0.1, 0.1 + 0.9 * (daysLeft / ROTATION_DECAY_DAYS))
+  }
+
+  function computeValue(inclusionRate: number, winrate: number, decks: number, rotMult: number): number {
+    if (inclusionRate <= 0) return 0
+    let wrMult = 1
+    if (decks >= 100 && winrate > 0) {
+      if (winrate >= 50) wrMult = 1 + (winrate - 50) * 0.03
+      else wrMult = Math.max(0.5, 1 - (50 - winrate) * 0.02)
+    }
+    return inclusionRate * wrMult * rotMult
+  }
+
   const missingCards = useMemo(() => {
-    const all = getEnrichedCards()
+    const all = getEnrichedCards().map(c => {
+      if (formatFilter === 'wild') {
+        return { ...c, inclusionRate: c.inclusionRateWild, winrate: c.winrateWild, decks: c.decksWild }
+      }
+      return { ...c, inclusionRate: c.inclusionRateStd, winrate: c.winrateStd, decks: c.decksStd }
+    })
     const standardCodes = new Set(expansions.filter(e => e.standard).map(e => e.code))
 
-    let cards = all.filter(c => c.totalOwned < c.maxCopies && !c.freeNormal)
+    const rotatingDecay = new Map<string, number>()
+    if (formatFilter === 'standard' && rotationInfo) {
+      const mult = rotationMultiplier(rotationInfo.daysLeft)
+      for (const code of rotationInfo.rotatingCodes) rotatingDecay.set(code, mult)
+    }
+
+    let cards = all.filter(c => c.totalOwned < c.maxCopies && !c.freeNormal && c.set !== 'CORE')
 
     if (formatFilter === 'standard') {
       cards = cards.filter(c => standardCodes.has(c.set))
@@ -64,9 +95,20 @@ export default function CraftAdvisorView() {
       })
     }
 
+    const valued = cards.map(c => {
+      const rotMult = rotatingDecay.get(c.set) ?? 1
+      return { ...c, value: computeValue(c.inclusionRate, c.winrate, c.decks, rotMult), rotMult }
+    })
+
     const dir = sortAsc ? 1 : -1
-    cards.sort((a, b) => {
+    valued.sort((a, b) => {
       switch (sortCol) {
+        case 'value': {
+          const aHas = a.value > 0
+          const bHas = b.value > 0
+          if (aHas !== bHas) return aHas ? -1 : 1
+          return dir * (a.value - b.value) || a.name.localeCompare(b.name)
+        }
         case 'rarity':
           return dir * (RARITY_ORDER[a.rarity] - RARITY_ORDER[b.rarity])
             || DUST_COST[b.rarity] - DUST_COST[a.rarity]
@@ -93,8 +135,8 @@ export default function CraftAdvisorView() {
       }
     })
 
-    return cards
-  }, [getEnrichedCards, expansions, formatFilter, selectedSet, selectedRarities, selectedClass, onlyAffordable, dust, sortCol, sortAsc, collectionMode])
+    return valued
+  }, [getEnrichedCards, expansions, formatFilter, selectedSet, selectedRarities, selectedClass, onlyAffordable, dust, sortCol, sortAsc, collectionMode, rotationInfo])
 
   const craftPlan = useMemo(() => {
     if (!onlyAffordable) return null
@@ -147,7 +189,10 @@ export default function CraftAdvisorView() {
 
   return (
     <div className="p-6 max-w-6xl">
-      <h1 className="text-xl font-bold text-gold mb-6">Crafting</h1>
+      <div className="flex items-baseline gap-3 mb-6">
+        <h1 className="text-xl font-bold text-gold">Crafting</h1>
+        <span className="text-xs text-gray-500">Stats: <span className="text-gray-400">{bracketLabel(metaBracket)}</span></span>
+      </div>
 
       {/* Queue Panel */}
       {craftQueue.length > 0 && (
@@ -177,13 +222,11 @@ export default function CraftAdvisorView() {
                 <tbody>
                   {queuedCards.map(card => (
                     <tr key={card.dbfId} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
-                      <td className="px-4 py-1.5 w-6">
-                        <RarityGem size={12} rarity={card.rarity} />
+                      <td className="px-2 py-1 text-white relative overflow-hidden">
+                        {rarityBleedStyle(card.rarity) && <div style={rarityBleedStyle(card.rarity)!} />}
+                        <CardHover id={card.id} name={card.name} className="text-white relative z-[2]" style={{ textShadow: '0 0 4px #000, 0 0 4px #000' }} />
                       </td>
-                      <td className="px-2 py-1.5 text-white">
-                        <CardHover id={card.id} name={card.name} className="text-white" />
-                      </td>
-                      <td className="px-2 py-1.5 text-gray-500" style={{ color: RARITY_COLORS[card.rarity] }}>
+                      <td className="px-2 py-1 text-gray-500" style={{ color: RARITY_COLORS[card.rarity] }}>
                         {card.rarity[0] + card.rarity.slice(1).toLowerCase()}
                       </td>
                       <td className="px-2 py-1.5 text-right text-mana">
@@ -267,18 +310,18 @@ export default function CraftAdvisorView() {
 
         <RarityFilter selected={selectedRarities} onChange={setSelectedRarities} />
 
-        <select
+        <Dropdown
+          label="Set"
+          options={[
+            { value: '', label: 'All Sets' },
+            ...expansions.filter(e => e.code !== 'CORE').map(exp => ({
+              value: exp.code,
+              label: `${exp.name}${exp.standard ? ' (S)' : ''}`,
+            })),
+          ]}
           value={selectedSet}
-          onChange={e => setSelectedSet(e.target.value)}
-          className="bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-gray-300"
-        >
-          <option value="">All Sets</option>
-          {expansions.map(exp => (
-            <option key={exp.code} value={exp.code}>
-              {exp.name}{exp.standard ? ' (S)' : ''}
-            </option>
-          ))}
-        </select>
+          onChange={setSelectedSet}
+        />
 
         <ClassPicker
           value={selectedClass}
@@ -320,7 +363,7 @@ export default function CraftAdvisorView() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-white/10 text-gray-400 text-xs select-none">
-              <th className="text-left px-4 py-3 w-12"></th>
+              <th className="text-left px-2 py-3">Class</th>
               <th
                 className="text-left px-4 py-3 cursor-pointer hover:text-white"
                 onClick={() => handleSortClick('name')}
@@ -357,7 +400,12 @@ export default function CraftAdvisorView() {
               >
                 WR{sortIndicator('winrate')}
               </th>
-              <th className="text-left px-4 py-3">Class</th>
+              <th
+                className="text-right px-4 py-3 cursor-pointer hover:text-white"
+                onClick={() => handleSortClick('value')}
+              >
+                Value{sortIndicator('value')}
+              </th>
               <th className="text-center px-4 py-3">Have</th>
               <th className="w-10 px-2 py-3"></th>
             </tr>
@@ -366,15 +414,43 @@ export default function CraftAdvisorView() {
             {missingCards.slice(0, 200).map(card => {
               const queued = queueSet.has(card.dbfId)
               const rotating = formatFilter === 'standard' && rotationInfo?.rotatingCodes.has(card.set)
+              const showRotationBadge = rotating && rotationInfo!.daysLeft <= 60
               return (
-                <tr key={card.dbfId} className="border-b border-white/5 hover:bg-white/5">
-                  <td className="px-4 py-2">
-                    <RarityGem size={14} rarity={card.rarity} />
+                <tr key={card.dbfId} className="border-b border-white/5 hover:bg-white/5" style={{ height: 40 }}>
+                  <td className="pl-2 pr-1 py-2">
+                    <span
+                      className="flex items-center justify-center w-8 h-8 rounded-full"
+                      style={{
+                        border: `1.5px solid ${CLASS_COLORS[card.cardClass] ?? '#808080'}`,
+                        boxShadow: 'inset 0 0 0 1.5px #000',
+                      }}
+                      title={classLabel(card.cardClass)}
+                    >
+                      <ClassIcon cls={card.cardClass} size={20} />
+                    </span>
                   </td>
-                  <td className="px-4 py-2 text-white">
-                    <span className="flex items-center gap-1.5">
-                      <CardHover id={card.id} name={card.name} className="text-white" />
-                      {rotating && (
+                  <td className="px-4 py-1 text-white relative overflow-hidden">
+                    {rarityBleedStyle(card.rarity) && <div style={rarityBleedStyle(card.rarity)!} />}
+                    <div
+                      className="absolute z-[1] pointer-events-none"
+                      style={{
+                        right: -2,
+                        top: 0,
+                        bottom: 0,
+                        width: 140,
+                        backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${card.id}.jpg)`,
+                        backgroundSize: '160%',
+                        backgroundPosition: 'center 30%',
+                        opacity: 0.45,
+                        maskImage: 'linear-gradient(to right, transparent 0%, black 25%, black 80%, transparent 100%), linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 25%, black 80%, transparent 100%), linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%)',
+                        maskComposite: 'intersect',
+                        WebkitMaskComposite: 'destination-in',
+                      }}
+                    />
+                    <CardHover id={card.id} name="" className="flex items-center gap-1.5 relative z-[2]" style={{ textShadow: '0 0 4px #000, 0 0 4px #000, 1px 1px 3px #000' }}>
+                      <span className="text-white">{card.name}</span>
+                      {showRotationBadge && (
                         <span
                           className="shrink-0 text-orange-400 cursor-help"
                           title={`Rotating out ~${rotationInfo!.monthStr} (${rotationInfo!.daysLeft}d)`}
@@ -386,7 +462,7 @@ export default function CraftAdvisorView() {
                           </svg>
                         </span>
                       )}
-                    </span>
+                    </CardHover>
                   </td>
                   <td className="px-4 py-2" style={{ color: RARITY_COLORS[card.rarity] }}>
                     {card.rarity[0] + card.rarity.slice(1).toLowerCase()}
@@ -403,11 +479,13 @@ export default function CraftAdvisorView() {
                   <td className="px-4 py-2 text-right text-amber-400 text-xs">
                     {card.decks >= 100 && card.winrate > 0 ? `${card.winrate.toFixed(2)}%` : '-'}
                   </td>
-                  <td className="px-4 py-2 text-xs">
-                    <span className="flex items-center gap-1" style={{ color: CLASS_COLORS[card.cardClass] ?? '#808080' }}>
-                      <ClassIcon cls={card.cardClass} size={12} />
-                      {classLabel(card.cardClass)}
-                    </span>
+                  <td className="px-4 py-2 text-right text-gold font-medium text-xs">
+                    {card.value > 0 ? card.value.toFixed(1) : '-'}
+                    {rotating && card.rotMult < 1 && (
+                      <span className="text-orange-400 ml-1" title={`Rotation decay: -${Math.round((1 - card.rotMult) * 100)}%`}>
+                        ↓
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-center text-gray-400">
                     {card.totalOwned}/{card.maxCopies}
