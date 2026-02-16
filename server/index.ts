@@ -820,7 +820,6 @@ async function fetchWithPoll(url: string, sessionId?: string, maxRetries = 12, d
 
       if (res.status === 200) return res;
       if (res.status === 202) {
-        console.log(`HSReplay query processing (attempt ${attempt + 1}/${maxRetries})`);
         await new Promise(r => setTimeout(r, delayMs));
         continue;
       }
@@ -1736,9 +1735,15 @@ app.put('/api/settings', authenticateUser, (req: AuthRequest, res) => {
   if (existsSync(settingsPath)) {
     try { current = JSON.parse(readFileSync(settingsPath, 'utf-8')); } catch { /* empty */ }
   }
+  const wasConsenting = current.premiumConsent === true;
   const updated = { ...current, ...req.body };
   writeFileSync(settingsPath, JSON.stringify(updated, null, 2));
   res.json(updated);
+
+  if (!wasConsenting && updated.premiumConsent === true && updated.isPremium === true) {
+    console.log(`[Meta] Premium consent granted by ${req.userId}, triggering immediate bracket fetch`);
+    fetchAllBrackets().catch(err => console.error('[Meta] Consent-triggered fetch failed:', err));
+  }
 });
 
 const MAX_SNAPSHOTS = 365;
@@ -2055,7 +2060,7 @@ async function prefetchBatch(
         rateLimited++;
         const pause = result.retryAfter || 60000;
         rateLimitPauseUntil = Date.now() + pause;
-        console.log(`[Prefetch] 429 rate limited, all workers pausing ${pause / 1000}s`);
+        if (rateLimited === 1) console.log(`[Prefetch] 429 rate limited, pausing ${pause / 1000}s`);
         i = idx;
         continue;
       }
@@ -2256,8 +2261,15 @@ function buildSnapshot(collection: Record<string, number[]>, dust: number, db: C
 
   for (const [dbfId, card] of Object.entries(db)) {
     const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2;
-    const counts = collection[dbfId] ?? [0, 0, 0, 0];
-    const owned = Math.min(counts[0] + counts[1] + (counts[2] ?? 0) + (counts[3] ?? 0), maxCopies);
+    const dc = collection[dbfId] ?? [0, 0, 0, 0];
+    let n = dc[0] || 0, g = dc[1] || 0, d = dc[2] ?? 0, s = dc[3] ?? 0;
+    if (card.aliasDbfIds) {
+      for (const alias of card.aliasDbfIds) {
+        const ac = collection[alias];
+        if (ac) { n = Math.max(n, ac[0] || 0); g = Math.max(g, ac[1] || 0); d = Math.max(d, ac[2] ?? 0); s = Math.max(s, ac[3] ?? 0); }
+      }
+    }
+    const owned = Math.min(n + g + d + s, maxCopies);
 
     overallOwned += owned;
     overallTotal += maxCopies;

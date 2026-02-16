@@ -146,7 +146,7 @@ export const useStore = create<AppState>((set, get) => ({
   addToast: (message, type) => {
     const id = Date.now()
     set(s => ({ toasts: [...s.toasts, { id, message, type }] }))
-    setTimeout(() => get().dismissToast(id), 4000)
+    setTimeout(() => get().dismissToast(id), 8000)
   },
   dismissToast: (id) => set(s => ({ toasts: s.toasts.filter(t => t.id !== id) })),
   dataErrors: [],
