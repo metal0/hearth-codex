@@ -20,6 +20,7 @@ A multi-user web application that tracks Hearthstone card collections with prope
 | Card art (golden/signature/diamond) | `hearthstone.wiki.gg` Premium1/2/3 images | Proxied and cached server-side |
 | User collection | HSReplay API via saved session cookie + Cloudflare bypass | Manual trigger + server auto-sync every 12h for active users |
 | Meta/usage stats (standard + wild) | HSReplay `card_list_free` endpoint | Multi-bracket system: free brackets auto-refresh 12h, premium brackets via consenting premium users (24h expiry) |
+| Deck archetypes + stats | HSGuru (hsguru.com) HTML scraping with LiveView WebSocket pagination | Cached in `data/deck-cache/` with 4h TTL, per-class wild scraping |
 
 ### Server Responsibilities
 - Serve the React SPA (production build from `dist/`)
@@ -29,6 +30,8 @@ A multi-user web application that tracks Hearthstone card collections with prope
 - Background prefetch all card art on startup
 - Cache card DB + meta brackets + art to filesystem (`data/`)
 - Run Monte Carlo pack simulations (offloaded to server to avoid blocking UI)
+- Scrape HSGuru for deck archetype data, card stats, and per-class wild decks
+- Auto-refresh shared deck data (Standard + Wild) periodically
 - Manage per-user data (collection, snapshots, settings) with token auth
 - Auto-sync collections every 12h for users active within 48h
 - Purge inactive user data after 90 days of no activity
@@ -290,12 +293,13 @@ Per-expansion pack value analysis using meta stats to prioritize which packs to 
 
 ### 5. Decks (`/decks`)
 
-HSReplay archetype deck explorer showing all meta decks for the active stats bracket (Standard only).
+HSReplay archetype deck explorer with two view modes: individual decks and archetype tiers. Supports Standard and Wild (toggled via Settings game mode). Wild data scraped per-class from HSGuru for broader coverage.
 
 **Data Sources:**
 - HSReplay `/api/v1/archetypes/` (public) — archetype definitions
 - `archetype_popularity_distribution_stats` — per-archetype WR, games, meta%
 - `list_decks_by_win_rate` — individual decklists with stats
+- HSGuru (hsguru.com) — augments HSReplay decks with card inclusion rates, drawn/played/kept WR, and per-class wild deck scraping via LiveView WebSocket pagination
 - All analytics endpoints use `fetchWithPoll()` with session auth
 - Cached in `data/deck-cache/` with 4h TTL (archetypes: 24h)
 
@@ -306,18 +310,24 @@ HSReplay archetype deck explorer showing all meta decks for the active stats bra
 - Rotation-adjusted craft cost: cards in sets rotating within 90 days get `daysLeft/90` weight multiplier
 - Rotation warning on decks with missing epic/legendary cards rotating soon
 
+**View Modes:**
+- **Deck view** (default): individual decklists ranked by scoring
+- **Archetype view**: tier-based grouping (S/A/B/C/D) by win rate, showing best deck per archetype with core/flex card breakdown and card stats (inclusion %, drawn/played/kept WR)
+
 **Filters:**
-- Search bar (archetype name)
+- Search bar (archetype name, or card name with "has:" prefix)
 - Class filter (reuses ClassPicker)
 - Archetype dropdown (populated per selected class)
 - Buildable toggle (craftCost === 0)
 - Max dust slider (0–50000)
+- Min games threshold (default: 200 Standard, 50 Wild)
 - Sort by: Dust Value, Win Rate, Games, Dust Cost, Stars/hr (ascending/descending toggle)
 
 **Collapsed Deck Row:**
 - Class icon, archetype name (links to HSReplay deck page), WR%, games, meta%, avg duration, stars/hr
 - Dust to craft (red if exceeds user's dust, "Ready" badge if 0), dust value score, rotation ⚠
-- Card circles: 28px art miniatures from HearthstoneJSON CDN with class-colored borders, count badges, hover for full card preview
+- Card circles: 28px art miniatures (shared CardCircle component) with class-colored borders, count badges, greyed-out unowned, hover for full card preview
+- Sideboard/companion cards: resolved from deckstring sideboard data, shown as visual subcards grouped under their parent card with rarity-colored left borders
 - Copy button: deckstring to clipboard
 
 **Expanded Card List:**
@@ -328,10 +338,11 @@ HSReplay archetype deck explorer showing all meta decks for the active stats bra
 - Sortable by mana cost or dust cost
 - Rotation warning ⚠ on missing epic/legendary cards from rotating sets
 
-**Deckstring Encoder:**
-- Server-side `encodeDeckstring()` in `server/decks.ts`
+**Deckstring Encoder/Decoder:**
+- Server-side `encodeDeckstring()` and `decodeDeckstring()` in `server/decks.ts`
 - Varint + base64 format matching Hearthstone deckstring spec
 - Hero dbfId map for all 11 classes
+- Decoder extracts hero, cards, and sideboard pairs from deckstrings
 
 ### 6. Collection History (`/history`)
 
@@ -387,7 +398,8 @@ Identifies safe-to-disenchant extras with composite safety scoring that factors 
 **Card Database:**
 - Refresh from HearthstoneJSON (also clears art cache)
 
-**Meta Stats Bracket:**
+**Meta Stats Bracket (Tier 2 only):**
+- Hidden for Tier 1 users (bracket changes require session ID auth, enforced at API level)
 - Two dropdowns: Rank Range + Time Range (compose into bracket key)
 - Available brackets highlighted, unavailable greyed with "(unavailable)"
 - Last premium fetch timestamp
@@ -491,8 +503,8 @@ Users select their preferred bracket via Settings dropdowns (rank range + time r
 - No server-side user created, no token issued
 - Collection data, settings, and meta stored in `localStorage`
 - Battletag extracted from collection page HTML title (fallback: `Player#accountLo`)
-- Features: collection view, calculator, craft/DE advisor, pack advisor, decks (free brackets), card art
-- Unavailable: collection history/snapshots, persistent settings, premium brackets
+- Features: collection view, calculator, craft/DE advisor, pack advisor, decks (free brackets only), card art
+- Unavailable: collection history/snapshots, persistent settings, meta bracket selection, premium brackets
 
 **Tier 2 — Session ID (full):**
 - HSReplay `sessionid` cookie serves as registration key (no passwords)
@@ -508,19 +520,14 @@ Users select their preferred bracket via Settings dropdowns (rank range + time r
 - Tier 1 users can upgrade to Tier 2 via Settings page without re-entering collection URL
 
 ### Onboarding
-First-time visitors see a mandatory full-screen modal with two tabs:
+First-time visitors see a mandatory full-screen modal (collection URL only — no session ID option during onboarding):
 
-**Tab 1 — Collection URL (default):**
-1. Explains HSReplay.net account requirement and Hearthstone Deck Tracker
-2. Instructions: enable public collection in HSReplay account settings
-3. Paste collection URL input + "View Collection" button
-4. On success: stores collection + meta in localStorage, sets authTier to 'collection', loads app
-
-**Tab 2 — Session ID (labeled "Advanced"):**
-1. Step-by-step instructions for getting sessionId from browser DevTools
-2. Paste input + "Connect Account" button
-3. On success: stores token + accountLo in localStorage, sets authTier to 'full', loads app
-4. On failure: shows server error message inline
+1. Explains HSReplay.net account requirement and Hearthstone Deck Tracker installation
+2. Instructions: enable public collection in HSReplay account settings, open collection page and copy URL
+3. Direct link to `https://hsreplay.net/collection/mine/` for easy URL copying
+4. Paste collection URL input + "View Collection" button
+5. On success: stores collection + meta in localStorage, sets authTier to 'collection', loads app
+6. Session ID upgrade available later via Settings page (Tier 1 → Tier 2)
 
 ### Per-User Data
 ```
@@ -699,7 +706,8 @@ hearthstone/
 │   ├── auth.ts                # Token generation, user management, 90-day purge
 │   ├── data.ts                # Card data, expansions, collection parsing
 │   ├── simulator.ts           # Monte Carlo pack simulation + strategy comparison
-│   ├── decks.ts               # Deckstring encoder, hero dbfIds, HSReplay deck response types
+│   ├── decks.ts               # Deckstring encoder/decoder, hero dbfIds, HSReplay deck response types
+│   ├── hsguru.ts              # HSGuru HTML scraper with LiveView WebSocket pagination + card stats
 │   └── cloudflare.ts          # Puppeteer-stealth CF bypass + browser-based fetch
 ├── src/
 │   ├── main.tsx               # Entry point
@@ -717,6 +725,7 @@ hearthstone/
 │   │   ├── ClassPicker.tsx    # WoW-style class icons
 │   │   ├── RarityFilter.tsx   # Rarity gem toggle chips
 │   │   ├── CollectionModeToggle.tsx  # N/G/S/D mode toggle
+│   │   ├── CardCircle.tsx     # Shared 28px card art miniature with rarity border + ownership
 │   │   └── Icons.tsx          # Dust, gold, pack SVG icons
 │   ├── views/
 │   │   ├── CollectionView.tsx
@@ -732,11 +741,16 @@ hearthstone/
 │   ├── hooks/
 │   │   ├── useCollectionSnapshots.ts  # Server-side snapshot management
 │   │   └── useRotationInfo.ts         # Shared rotation date/sets hook
+│   ├── lib/
+│   │   ├── simulator.ts       # Client-side pack simulation (Web Worker bridge)
+│   │   └── collection.ts      # Collection data helpers
+│   ├── workers/
+│   │   └── calculator.worker.ts  # Web Worker for calculator simulations
 │   ├── utils/
 │   │   ├── searchParser.ts    # Hearthstone keyword search parser
 │   │   └── localStorageMigration.ts   # Per-user localStorage key migration
 │   └── services/
-│       └── api.ts             # API client with token auth
+│       └── api.ts             # API client with token auth + auth tier helpers
 └── cli/                       # Original CLI calculator (preserved)
 ```
 
