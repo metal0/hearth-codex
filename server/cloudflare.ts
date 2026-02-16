@@ -1,15 +1,18 @@
-import type { Browser } from 'puppeteer';
+import type { Browser, Page } from 'puppeteer';
 
 const CF_SOLVE_TIMEOUT_MS = 60_000;
+const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const CF_RENEW_MARGIN_MS = 5 * 60 * 1000;
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-let cfClearance: string | null = null;
-let cfExpires = 0;
+let browser: Browser | null = null;
+let page: Page | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let renewTimer: ReturnType<typeof setTimeout> | null = null;
 let cfReady = false;
 let solving = false;
 let solvePromise: Promise<boolean> | null = null;
-let renewTimer: ReturnType<typeof setTimeout> | null = null;
+let cfExpires = 0;
 let puppeteerLoaded: typeof import('puppeteer-extra').default | null = null;
 
 async function loadPuppeteer() {
@@ -22,6 +25,52 @@ async function loadPuppeteer() {
   return puppeteer;
 }
 
+function resetIdleTimer() {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(async () => {
+    console.log('[CF] Idle timeout, closing browser');
+    await closeBrowser();
+  }, IDLE_TIMEOUT_MS);
+}
+
+async function closeBrowser() {
+  cfReady = false;
+  if (renewTimer) { clearTimeout(renewTimer); renewTimer = null; }
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (page) { try { await page.close(); } catch {} page = null; }
+  if (browser) { try { await browser.close(); } catch {} browser = null; }
+}
+
+async function ensureBrowser(): Promise<Page> {
+  if (browser && page) {
+    try { await page.evaluate('1'); return page; } catch { await closeBrowser(); }
+  }
+
+  const puppeteer = await loadPuppeteer();
+  console.log('[CF] Launching browser...');
+  browser = await puppeteer.launch({
+    headless: 'new' as never,
+    protocolTimeout: 300_000,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-background-networking',
+      '--disable-default-apps',
+      '--disable-translate',
+      '--no-first-run',
+      '--js-flags=--max-old-space-size=128',
+    ],
+  });
+
+  page = await browser.newPage();
+  await page.setViewport({ width: 1920, height: 1080 });
+  return page;
+}
+
 function scheduleRenewal() {
   if (renewTimer) clearTimeout(renewTimer);
   if (!cfExpires) return;
@@ -30,7 +79,7 @@ function scheduleRenewal() {
   renewTimer = setTimeout(() => {
     renewTimer = null;
     console.log('[CF] Auto-renewing CF clearance...');
-    solveCfChallenge().catch(err => {
+    ensureCfReady().catch(err => {
       console.error('[CF] Auto-renewal failed:', err instanceof Error ? err.message : err);
     });
   }, delay);
@@ -38,58 +87,37 @@ function scheduleRenewal() {
 
 async function solveCfChallenge(): Promise<boolean> {
   console.log('[CF] Solving Cloudflare challenge...');
-  const puppeteer = await loadPuppeteer();
+  const p = await ensureBrowser();
 
-  let browser: Browser | null = null;
   try {
-    browser = await puppeteer.launch({
-      headless: 'new' as never,
-      protocolTimeout: 300_000,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-extensions',
-        '--disable-background-networking',
-        '--disable-default-apps',
-        '--disable-translate',
-        '--no-first-run',
-        '--js-flags=--max-old-space-size=128',
-      ],
-    });
-
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1920, height: 1080 });
-    await page.goto('https://hsreplay.net', { waitUntil: 'domcontentloaded', timeout: CF_SOLVE_TIMEOUT_MS });
+    await p.goto('https://hsreplay.net', { waitUntil: 'domcontentloaded', timeout: CF_SOLVE_TIMEOUT_MS });
 
     const startTime = Date.now();
     while (Date.now() - startTime < CF_SOLVE_TIMEOUT_MS) {
-      const cookies = await page.cookies();
+      const cookies = await p.cookies();
       const cfCookie = cookies.find(c => c.name === 'cf_clearance');
       if (cfCookie) {
-        cfClearance = cfCookie.value;
         cfExpires = cfCookie.expires > 0
           ? cfCookie.expires * 1000
           : Date.now() + 30 * 60 * 1000;
         cfReady = true;
-        console.log(`[CF] Challenge solved! Cookie expires in ${Math.round((cfExpires - Date.now()) / 60000)}m`);
+        console.log(`[CF] Challenge solved! Expires in ${Math.round((cfExpires - Date.now()) / 60000)}m`);
+        resetIdleTimer();
         scheduleRenewal();
         return true;
       }
 
-      const isCfChallenge = await page.evaluate(() => {
+      const isCfChallenge = await p.evaluate(() => {
         const title = document.title.toLowerCase();
         return title.includes('just a moment') || title.includes('attention required')
           || !!document.querySelector('#challenge-running, #challenge-form, .cf-browser-verification');
       });
 
       if (!isCfChallenge) {
-        cfClearance = null;
         cfExpires = Date.now() + 30 * 60 * 1000;
         cfReady = true;
-        console.log('[CF] No challenge detected, browser not needed');
+        console.log('[CF] No challenge detected, proceeding with browser-based fetch');
+        resetIdleTimer();
         scheduleRenewal();
         return true;
       }
@@ -102,10 +130,6 @@ async function solveCfChallenge(): Promise<boolean> {
   } catch (err) {
     console.error('[CF] Solve failed:', err instanceof Error ? err.message : err);
     return false;
-  } finally {
-    if (browser) {
-      try { await browser.close(); } catch {}
-    }
   }
 }
 
@@ -122,52 +146,39 @@ export async function ensureCfReady(): Promise<boolean> {
   return solvePromise;
 }
 
-function isCfChallengeResponse(status: number, contentType: string | null): boolean {
-  return (status === 403 || status === 503) && (contentType?.includes('text/html') ?? false);
-}
+async function evaluateFetch(p: Page, url: string, sessionId?: string | null): Promise<{ status: number; body: string }> {
+  if (sessionId) {
+    await p.setCookie({
+      name: 'sessionid', value: sessionId,
+      domain: '.hsreplay.net', path: '/', httpOnly: true, secure: true,
+    });
+  } else {
+    await p.deleteCookie({ name: 'sessionid', domain: '.hsreplay.net' });
+  }
 
-function buildCookieHeader(sessionId?: string | null): string {
-  const parts: string[] = [];
-  if (cfClearance) parts.push(`cf_clearance=${cfClearance}`);
-  if (sessionId) parts.push(`sessionid=${sessionId}`);
-  return parts.join('; ');
+  return p.evaluate(async (fetchUrl: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60_000);
+    try {
+      const res = await fetch(fetchUrl, {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      return { status: res.status, body: text };
+    } finally {
+      clearTimeout(timer);
+    }
+  }, url);
 }
 
 export async function cfFetch(url: string, sessionId?: string | null): Promise<{ status: number; body: string }> {
   await ensureCfReady();
+  resetIdleTimer();
 
-  const cookie = buildCookieHeader(sessionId);
-  const res = await fetch(url, {
-    headers: {
-      'Accept': 'application/json',
-      'User-Agent': CHROME_UA,
-      ...(cookie ? { 'Cookie': cookie } : {}),
-    },
-    redirect: 'follow',
-  });
-
-  const contentType = res.headers.get('content-type');
-  const body = await res.text();
-
-  if (isCfChallengeResponse(res.status, contentType)) {
-    console.log('[CF] Challenge detected on fetch, solving...');
-    cfReady = false;
-    const solved = await ensureCfReady();
-    if (!solved) return { status: 403, body: 'Cloudflare challenge failed' };
-
-    const cookie2 = buildCookieHeader(sessionId);
-    const res2 = await fetch(url, {
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': CHROME_UA,
-        ...(cookie2 ? { 'Cookie': cookie2 } : {}),
-      },
-      redirect: 'follow',
-    });
-    return { status: res2.status, body: await res2.text() };
-  }
-
-  return { status: res.status, body };
+  const p = await ensureBrowser();
+  return evaluateFetch(p, url, sessionId);
 }
 
 export function getCfStatus(): { valid: boolean; expiresIn: number } {
