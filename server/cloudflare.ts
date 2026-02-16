@@ -103,6 +103,22 @@ async function solveCfChallenge(): Promise<boolean> {
         resetIdleTimer();
         return true;
       }
+
+      const isCfChallenge = await p.evaluate(() => {
+        const title = document.title.toLowerCase();
+        return title.includes('just a moment') || title.includes('attention required')
+          || !!document.querySelector('#challenge-running, #challenge-form, .cf-browser-verification');
+      });
+
+      if (!isCfChallenge) {
+        expiresAt = Date.now() + 30 * 60 * 1000;
+        solvedAt = Date.now();
+        cfReady = true;
+        console.log('[CF] No challenge detected, proceeding without cf_clearance');
+        resetIdleTimer();
+        return true;
+      }
+
       await new Promise(r => setTimeout(r, 1000));
     }
 
