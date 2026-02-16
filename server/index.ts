@@ -18,7 +18,7 @@ import {
   getAllExpansions,
   type CardDb,
 } from './data.ts';
-import { ensureCfReady, fetchThroughBrowser, fetchThroughBrowserPublic, setSessionCookie, clearSessionCookie, getCfStatus, clearCfSession, acquireSessionLock, fetchWithoutSession } from './cloudflare.ts';
+import { ensureCfReady, cfFetch, getCfStatus, clearCfSession } from './cloudflare.ts';
 import { initAuth, resolveUserByToken, createUser, updateSessionId, getAllUsers, purgeInactiveUsers, findUserByAccount, deleteUser, type TokenData } from './auth.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -368,7 +368,7 @@ async function fetchPublicCollection(region: number, accountLo: string): Promise
   const url = `https://hsreplay.net/api/v1/collection/?account_lo=${accountLo}&region=${region}`;
   const MAX_RETRIES = 3;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const result = await fetchThroughBrowserPublic(url);
+    const result = await cfFetch(url);
     if (result.status === 401 || result.status === 403) {
       throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
     }
@@ -410,36 +410,31 @@ app.post('/api/auth/collection-login', async (req, res) => {
   }
 
   try {
-    await ensureCfReady();
-    const release = await acquireSessionLock();
     let collectionResult: { collection: Record<string, number[]>; dust: number };
     let battletag = `Player#${parsed.accountLo}`;
-    try {
-      const collUrl = `https://hsreplay.net/api/v1/collection/?account_lo=${parsed.accountLo}&region=${parsed.region}`;
-      const collResp = await fetchWithoutSession(collUrl);
-      if (collResp.status === 401 || collResp.status === 403) {
-        throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
-      }
-      if (collResp.status !== 200) {
-        throw new Error(`HSReplay returned ${collResp.status}`);
-      }
-      const data = JSON.parse(collResp.body);
-      collectionResult = { collection: data.collection ?? {}, dust: data.dust ?? 0 };
 
-      try {
-        const pageResp = await fetchWithoutSession(`https://hsreplay.net/collection/${parsed.region}/${parsed.accountLo}/`);
-        if (pageResp.status === 200) {
-          const titleMatch = pageResp.body.match(/<title>([^<]+)<\/title>/);
-          if (titleMatch) {
-            const decoded = titleMatch[1].replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
-            const cleaned = decoded.replace(/'s [Cc]ollection.*$/, '').replace(/ - HSReplay\.net$/, '').trim();
-            if (cleaned && cleaned !== 'HSReplay.net') battletag = cleaned;
-          }
-        }
-      } catch {}
-    } finally {
-      release();
+    const collUrl = `https://hsreplay.net/api/v1/collection/?account_lo=${parsed.accountLo}&region=${parsed.region}`;
+    const collResp = await cfFetch(collUrl);
+    if (collResp.status === 401 || collResp.status === 403) {
+      throw new Error('Collection is private. Enable public sharing at hsreplay.net → My Account → Collection visibility.');
     }
+    if (collResp.status !== 200) {
+      throw new Error(`HSReplay returned ${collResp.status}`);
+    }
+    const data = JSON.parse(collResp.body);
+    collectionResult = { collection: data.collection ?? {}, dust: data.dust ?? 0 };
+
+    try {
+      const pageResp = await cfFetch(`https://hsreplay.net/collection/${parsed.region}/${parsed.accountLo}/`);
+      if (pageResp.status === 200) {
+        const titleMatch = pageResp.body.match(/<title>([^<]+)<\/title>/);
+        if (titleMatch) {
+          const decoded = titleMatch[1].replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+          const cleaned = decoded.replace(/'s [Cc]ollection.*$/, '').replace(/ - HSReplay\.net$/, '').trim();
+          if (cleaned && cleaned !== 'HSReplay.net') battletag = cleaned;
+        }
+      }
+    } catch {}
     const { collection, dust } = collectionResult;
     const cards = Object.keys(collection).length;
 
@@ -512,17 +507,13 @@ app.post('/api/auth/register', async (req, res) => {
     return;
   }
 
-  const releaseReg = await acquireSessionLock();
   try {
-    await setSessionCookie(sessionId);
-    const acctResult = await fetchThroughBrowser('https://hsreplay.net/api/v1/account/');
+    const acctResult = await cfFetch('https://hsreplay.net/api/v1/account/', sessionId);
     if (acctResult.status === 401) {
-      releaseReg();
       res.status(400).json({ error: 'Invalid or expired HSReplay session cookie. Please get a fresh sessionid.' });
       return;
     }
     if (acctResult.status !== 200) {
-      releaseReg();
       res.status(502).json({ error: `HSReplay returned ${acctResult.status}` });
       return;
     }
@@ -530,7 +521,6 @@ app.post('/api/auth/register', async (req, res) => {
     const acctData = JSON.parse(acctResult.body);
     const blizzAccounts = acctData?.blizzard_accounts;
     if (!Array.isArray(blizzAccounts) || blizzAccounts.length === 0) {
-      releaseReg();
       res.status(400).json({ error: 'No Blizzard account linked to HSReplay' });
       return;
     }
@@ -548,8 +538,7 @@ app.post('/api/auth/register', async (req, res) => {
     if (acct.region) params.set('region', String(region));
     collectionUrl += `?${params.toString()}`;
 
-    const collResult = await fetchThroughBrowser(collectionUrl);
-    releaseReg();
+    const collResult = await cfFetch(collectionUrl, sessionId);
 
     let cards = 0;
     let dust = 0;
@@ -572,7 +561,6 @@ app.post('/api/auth/register', async (req, res) => {
 
     res.json({ success: true, token: user.tokenData.token, battletag, accountLo, cards, dust, isPremium });
   } catch (err: unknown) {
-    releaseReg();
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
@@ -728,13 +716,9 @@ app.post('/api/collection/sync', authenticateUser, async (req: AuthRequest, res)
     return;
   }
 
-  const releaseSession = await acquireSessionLock();
   try {
-    await setSessionCookie(sessionId);
-
-    const acctResult = await fetchThroughBrowser('https://hsreplay.net/api/v1/account/');
+    const acctResult = await cfFetch('https://hsreplay.net/api/v1/account/', sessionId);
     if (acctResult.status === 401) {
-      releaseSession();
       res.status(401).json({ error: 'HSReplay session expired. Please update it in Settings.', sessionExpired: true });
       return;
     }
@@ -752,8 +736,7 @@ app.post('/api/collection/sync', authenticateUser, async (req: AuthRequest, res)
       }
     }
 
-    const result = await fetchThroughBrowser(collectionUrl);
-    releaseSession();
+    const result = await cfFetch(collectionUrl, sessionId);
 
     if (req.body?.sessionId && req.body.sessionId !== tokenData.sessionId) {
       updateSessionId(req.userId!, req.body.sessionId);
@@ -783,7 +766,6 @@ app.post('/api/collection/sync', authenticateUser, async (req: AuthRequest, res)
       syncedAt,
     });
   } catch (err: unknown) {
-    releaseSession();
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ error: message });
   }
@@ -815,30 +797,20 @@ function isMetaStale(): boolean {
 
 async function fetchWithPoll(url: string, sessionId?: string, maxRetries = 12, delayMs = 10000): Promise<{ status: number; body: string } | null> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    let release: (() => void) | undefined;
-    try {
-      if (sessionId) {
-        release = await acquireSessionLock();
-        await setSessionCookie(sessionId);
-      }
-      const res = await fetchThroughBrowser(url);
-      if (release) { release(); release = undefined; }
+    const res = await cfFetch(url, sessionId);
 
-      if (res.status === 200) return res;
-      if (res.status === 202) {
-        await new Promise(r => setTimeout(r, delayMs));
-        continue;
-      }
-      if (res.status === 403 && attempt === 0) {
-        console.log('Meta fetch got 403, re-solving Cloudflare...');
-        clearCfSession();
-        continue;
-      }
-      console.log(`HSReplay returned ${res.status} for ${url}: ${res.body.slice(0, 200)}`);
-      return null;
-    } finally {
-      if (release) release();
+    if (res.status === 200) return res;
+    if (res.status === 202) {
+      await new Promise(r => setTimeout(r, delayMs));
+      continue;
     }
+    if (res.status === 403 && attempt === 0) {
+      console.log('Meta fetch got 403, re-solving Cloudflare...');
+      clearCfSession();
+      continue;
+    }
+    console.log(`HSReplay returned ${res.status} for ${url}: ${res.body.slice(0, 200)}`);
+    return null;
   }
   return null;
 }
@@ -1020,18 +992,13 @@ function pickAnyUser(): import('./auth.ts').ResolvedUser | null {
 }
 
 async function probePremium(sessionId: string): Promise<boolean> {
-  const release = await acquireSessionLock();
   try {
-    await ensureCfReady();
-    await setSessionCookie(sessionId);
     const url = 'https://hsreplay.net/analytics/query/card_list_free/?GameType=RANKED_STANDARD&TimeRange=CURRENT_PATCH&LeagueRankRange=DIAMOND_THROUGH_LEGEND';
-    const res = await fetchThroughBrowser(url);
+    const res = await cfFetch(url, sessionId);
     return res.status === 200 || res.status === 202;
   } catch (err) {
     console.log(`[Premium] Probe error:`, err);
     return false;
-  } finally {
-    release();
   }
 }
 
@@ -1299,10 +1266,8 @@ async function fetchArchetypes(): Promise<HsrArchetype[]> {
     } catch { /* corrupted */ }
   }
 
-  const release = await acquireSessionLock();
   try {
-    await ensureCfReady();
-    const res = await fetchThroughBrowser('https://hsreplay.net/api/v1/archetypes/');
+    const res = await cfFetch('https://hsreplay.net/api/v1/archetypes/');
     if (res.status === 200) {
       const data = JSON.parse(res.body) as HsrArchetype[];
       writeFileSync(cachePath, JSON.stringify({ data, fetchedAt: Date.now() }));
@@ -1310,8 +1275,6 @@ async function fetchArchetypes(): Promise<HsrArchetype[]> {
     }
   } catch (err) {
     console.error('[Decks] Failed to fetch archetypes:', err);
-  } finally {
-    release();
   }
 
   if (existsSync(cachePath)) {
@@ -2233,8 +2196,7 @@ const SYNC_INTERVAL = 12 * 60 * 60 * 1000;
 const PURGE_INTERVAL = 24 * 60 * 60 * 1000;
 
 async function syncUserCollection(userDir: string, sessionId: string): Promise<{ success: boolean; cards: number; dust: number; collection: Record<string, number[]> }> {
-  await setSessionCookie(sessionId);
-  const acctResult = await fetchThroughBrowser('https://hsreplay.net/api/v1/account/');
+  const acctResult = await cfFetch('https://hsreplay.net/api/v1/account/', sessionId);
   if (acctResult.status !== 200) return { success: false, cards: 0, dust: 0, collection: {} };
 
   let collectionUrl = 'https://hsreplay.net/api/v1/collection/';
@@ -2248,7 +2210,7 @@ async function syncUserCollection(userDir: string, sessionId: string): Promise<{
     collectionUrl += `?${params.toString()}`;
   }
 
-  const result = await fetchThroughBrowser(collectionUrl);
+  const result = await cfFetch(collectionUrl, sessionId);
   if (result.status !== 200) return { success: false, cards: 0, dust: 0, collection: {} };
 
   const data = JSON.parse(result.body);
