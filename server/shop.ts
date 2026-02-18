@@ -141,21 +141,34 @@ async function cargoQuery<T>(params: Record<string, string>): Promise<T[]> {
     ...params,
   });
   const url = `${WIKI_API}?${qs}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!res.ok) throw new Error(`Wiki API error: ${res.status}`);
-    const json = await res.json() as { cargoquery?: CargoRow[] };
-    return (json.cargoquery ?? []).map(r => r.title as unknown as T);
-  } catch (err) {
-    clearTimeout(timeout);
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error('Wiki API request timed out (15s)');
+  const MAX_RETRIES = 3;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.status === 429) {
+        const retryAfter = parseInt(res.headers.get('retry-after') || '5', 10);
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(r => setTimeout(r, retryAfter * 1000));
+          continue;
+        }
+        throw new Error(`Wiki API rate limited after ${MAX_RETRIES} attempts`);
+      }
+      if (!res.ok) throw new Error(`Wiki API error: ${res.status}`);
+      const json = await res.json() as { cargoquery?: CargoRow[] };
+      return (json.cargoquery ?? []).map(r => r.title as unknown as T);
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('Wiki API request timed out (15s)');
+      }
+      throw err;
     }
-    throw err;
   }
+  return [];
 }
 
 async function fetchActiveBundleInfo(): Promise<WikiBundleInfo[]> {

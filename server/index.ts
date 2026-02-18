@@ -328,16 +328,11 @@ app.get('/art/:filename', async (req, res) => {
     return;
   }
 
-  const buffer = await fetchAndCacheArt(cacheKey, sourceFn(cardId));
-  if (buffer) {
-    res.set('Content-Type', 'image/png');
-    const isHq = existsSync(cacheFile);
-    res.set('Cache-Control', isHq ? 'public, max-age=31536000, immutable' : 'public, max-age=60');
-    res.send(buffer);
-  } else {
-    res.set('Cache-Control', 'no-store');
-    res.status(404).end();
-  }
+  // Not cached — return 404 immediately and fetch in background
+  // This prevents the browser from blocking on slow external CDN fetches
+  fetchAndCacheArt(cacheKey, sourceFn(cardId)).catch(() => {});
+  res.set('Cache-Control', 'no-cache');
+  res.status(404).end();
 });
 
 let cardDb: CardDb | null = null;
