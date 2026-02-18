@@ -390,7 +390,7 @@ function DeckRow({ deck, expanded, onToggle, companionCards, showDustValue }: { 
                           top: 0,
                           height: '100%',
                           width: isCompanion ? artW - 10 : artW + 4,
-                          backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${c.id}.jpg)`,
+                          backgroundImage: `url(/art/${c.id}_normal.png)`,
                           backgroundSize: '130%',
                           backgroundPosition: 'center 30%',
                           opacity: isCompanion ? 0.25 : missing > 0 ? 0.3 : 0.6,
@@ -410,7 +410,7 @@ function DeckRow({ deck, expanded, onToggle, companionCards, showDustValue }: { 
                       {isCompanion ? '' : c.rarity === 'LEGENDARY' ? <span className="text-amber-300">★</span> : c.count > 1 ? <span className="text-[10px] font-bold px-1 py-0.5 rounded bg-black/40 border border-white/20 text-gold leading-none">×{c.count}</span> : ''}
                     </td>
                     <td className="text-center px-2 py-0">
-                      {isCompanion ? <span className="text-gray-600 text-[10px]">{c.sideboard ? 'choice' : 'token'}</span>
+                      {isCompanion ? <span className="text-gray-400 text-[10px]">{c.sideboard ? 'choice' : 'token'}</span>
                         : missing > 0 ? <span className="text-red-400">-{missing}</span>
                         : <span className="text-green-400">✓</span>
                       }
@@ -425,7 +425,7 @@ function DeckRow({ deck, expanded, onToggle, companionCards, showDustValue }: { 
                       )}
                     </td>
                     )}
-                    <td className="py-0 px-2 text-gray-600 text-[10px] whitespace-nowrap">
+                    <td className="py-0 px-2 text-gray-400 text-[10px] whitespace-nowrap">
                       {expansions.find(e => e.code === c.set)?.name ?? c.set}
                     </td>
                   </tr>
@@ -828,7 +828,7 @@ function ArchetypeRow({
                                   className="absolute pointer-events-none z-[1]"
                                   style={{
                                     right: -2, top: 0, height: '100%', width: artW + 4,
-                                    backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${c.id}.jpg)`,
+                                    backgroundImage: `url(/art/${c.id}_normal.png)`,
                                     backgroundSize: '130%', backgroundPosition: 'center 30%',
                                     opacity: missing > 0 ? 0.3 : 0.6,
                                     filter: missing > 0 ? 'grayscale(0.7)' : 'none',
@@ -851,7 +851,7 @@ function ArchetypeRow({
                               <td className="text-center px-2 py-0">
                                 {missing > 0 ? <span className="text-red-400 text-xs">-{missing}</span> : <span className="text-green-400 text-xs">✓</span>}
                               </td>
-                              <td className="py-0 px-2 text-gray-600 text-[10px] whitespace-nowrap">
+                              <td className="py-0 px-2 text-gray-400 text-[10px] whitespace-nowrap">
                                 {expansions.find(e => e.code === c.set)?.name ?? c.set}
                               </td>
                             </tr>
@@ -983,7 +983,7 @@ function CardInclusionFilter({ cardDb, requiredCards, onChange }: { cardDb: Card
                 <div
                   className="absolute inset-0 z-0 pointer-events-none opacity-30 group-hover:opacity-50"
                   style={{
-                    backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${card.id}.jpg)`,
+                    backgroundImage: `url(/art/${card.id}_normal.png)`,
                     backgroundSize: '180%',
                     backgroundPosition: 'center 25%',
                     maskImage: 'linear-gradient(to right, transparent 0%, black 30%, black 70%, transparent 100%)',
@@ -1006,7 +1006,7 @@ function CardInclusionFilter({ cardDb, requiredCards, onChange }: { cardDb: Card
                 <div
                   className="absolute inset-0 z-0 pointer-events-none opacity-25"
                   style={{
-                    backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${card.id}.jpg)`,
+                    backgroundImage: `url(/art/${card.id}_normal.png)`,
                     backgroundSize: '200%',
                     backgroundPosition: 'center 25%',
                     maskImage: 'linear-gradient(to right, transparent 0%, black 30%, black 80%, transparent 100%)',
@@ -1280,7 +1280,7 @@ export default function DecksView() {
             <span className="text-xs text-gray-500">Stats: <span className="text-gray-400">{bracketLabel(metaBracket)}</span></span>
           )}
           {deckSource && (
-            <span className="text-gray-600 text-[10px]">via {deckSource === 'hsguru' ? 'HSGuru' : 'HSReplay'}</span>
+            <span className="text-gray-400 text-[10px]">via {deckSource === 'hsguru' ? 'HSGuru' : 'HSReplay'}</span>
           )}
           {decksLoading && <span className="text-gold text-xs">Refreshing...</span>}
         </div>

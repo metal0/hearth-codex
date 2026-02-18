@@ -379,6 +379,8 @@ export async function fetchAndCacheCardDb(): Promise<CardDbRefreshResult> {
     };
     if (card.howToEarn) entry.freeNormal = true;
     if (card.howToEarnGolden) entry.freeGolden = true;
+    if (card.hasDiamondSkin) entry.hasDiamond = true;
+    if (signatureIds.has(entry.id)) entry.hasSignature = true;
     db[coreDbfId] = entry;
 
     const expansionDbfId = seenNames.get(name);

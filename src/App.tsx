@@ -7,6 +7,7 @@ import CraftAdvisorView from './views/CraftAdvisorView.tsx'
 import PackAdvisorView from './views/PackAdvisorView.tsx'
 import DecksView from './views/DecksView.tsx'
 import DisenchantAdvisorView from './views/DisenchantAdvisorView.tsx'
+import StoreView from './views/StoreView.tsx'
 import HistoryView from './views/HistoryView.tsx'
 import SettingsView from './views/SettingsView.tsx'
 import OnboardingPopup from './components/OnboardingPopup.tsx'
@@ -80,17 +81,11 @@ export default function App() {
       ])
 
       if (authTier === 'full') {
-        const { collection, syncCollection, addToast } = useStore.getState()
+        const { collection, syncCollection } = useStore.getState()
         const syncedAt = collection?.syncedAt
         const isStale = !syncedAt || (Date.now() - syncedAt > TWO_HOURS)
         if (!isStale) return
-
-        try {
-          const result = await syncCollection()
-          if (result.success) {
-            addToast(`Collection synced: ${result.cards?.toLocaleString()} cards, ${result.dust?.toLocaleString()} dust`, 'success')
-          }
-        } catch { /* network error — banner will show */ }
+        try { await syncCollection() } catch { /* network error — banner will show */ }
       }
     }
 
@@ -108,6 +103,7 @@ export default function App() {
         <Route path="/calculator" element={<CalculatorView />} />
         <Route path="/craft" element={<CraftAdvisorView />} />
         <Route path="/packs" element={<PackAdvisorView />} />
+        <Route path="/store" element={<StoreView />} />
         <Route path="/decks" element={<DecksView />} />
         <Route path="/disenchant" element={<DisenchantAdvisorView />} />
         <Route path="/history" element={<HistoryView />} />

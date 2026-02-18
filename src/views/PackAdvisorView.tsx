@@ -9,6 +9,7 @@ import CollectionModeToggle from '../components/CollectionModeToggle.tsx'
 import ClassPicker from '../components/ClassPicker.tsx'
 import RarityFilter from '../components/RarityFilter.tsx'
 import { useRotationInfo } from '../hooks/useRotationInfo.ts'
+import AdvisorDisclaimer from '../components/AdvisorDisclaimer.tsx'
 
 const PACK_WEIGHT: Record<Rarity, number> = {
   COMMON: 0.7614,
@@ -598,6 +599,7 @@ export default function PackAdvisorView() {
   const craftLabel = isSigMode ? 'golden craft cost' : isGoldenMode ? 'golden craft cost' : 'craft cost'
 
   return (
+    <AdvisorDisclaimer>
     <div className="p-6 max-w-5xl">
       <div className="flex items-baseline gap-3 mb-6">
         <h1 className="text-xl font-bold text-gold">Packs</h1>
@@ -664,7 +666,7 @@ export default function PackAdvisorView() {
               <span className="text-gray-500">missing meta {isSigMode ? 'legendaries' : 'cards'}</span>
               {!isSigMode && (
                 <>
-                  <span className="text-gray-600 mx-0.5">&middot;</span>
+                  <span className="text-gray-400 mx-0.5">&middot;</span>
                   <DustIcon size={12} />
                   <span className="text-mana font-medium">{best.craftCost.toLocaleString()}</span>
                   <span className="text-gray-500">{craftLabel}</span>
@@ -903,5 +905,6 @@ export default function PackAdvisorView() {
         </div>
       </details>
     </div>
+    </AdvisorDisclaimer>
   )
 }

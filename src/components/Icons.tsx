@@ -105,7 +105,36 @@ export function PackIcon({ size = 18, className }: IconProps) {
 }
 
 export function CraftIcon({ size = 18, className }: IconProps) {
-  return <WikiIcon url={`${WIKI}/AchievementPin_Gameplay.png`} size={size} className={className} />
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={`inline-block shrink-0 ${className ?? ''}`}>
+      <path d="M4 11h16l-1.5 2H5.5L4 11z" fill="#9ca3af" />
+      <path d="M4 11l2-1h12l2 1" fill="#d1d5db" />
+      <path d="M7.5 13h9v3.5h-9V13z" fill="#6b7280" />
+      <path d="M6 16.5h12v2.5H6v-2.5z" fill="#4b5563" />
+      <path d="M2 10l2.5 1V10c0-.5-.3-1-1-1H2.5c-.5 0-.7.3-.5.6l.5.4z" fill="#9ca3af" />
+      <path d="M14.5 4.5l-1.2 5.5h-2.6l-1.2-5.5c-.2-.7.3-1.5 1.1-1.5h2.8c.8 0 1.3.8 1.1 1.5z" fill="#b45309" />
+      <rect x="10.5" y="9" width="3" height="2" rx=".5" fill="#78350f" />
+    </svg>
+  )
+}
+
+export function StoreIcon({ size = 18, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" className={`inline-block shrink-0 ${className ?? ''}`}>
+      <path d="M7 11c-1.5 0-2.5 1.2-2.5 3v3c0 3 2 5 7.5 5s7.5-2 7.5-5v-3c0-1.8-1-3-2.5-3H7z" fill="#92600a" />
+      <path d="M7 11c-1.5 0-2.5 1.2-2.5 3v3c0 3 2 5 7.5 5s7.5-2 7.5-5v-3c0-1.8-1-3-2.5-3H7z" fill="url(#bag)" />
+      <path d="M9 11V8.5c0-2 1.5-3.5 3-3.5s3 1.5 3 3.5V11" stroke="#6b4410" strokeWidth="2" fill="none" strokeLinecap="round" />
+      <ellipse cx="9.5" cy="10" rx="2.8" ry="2" fill="#fbbf24" />
+      <ellipse cx="14.5" cy="9.5" rx="2.8" ry="2" fill="#fcd34d" />
+      <ellipse cx="12" cy="8" rx="2.5" ry="1.8" fill="#fde68a" />
+      <defs>
+        <linearGradient id="bag" x1="12" y1="11" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#b87a1a" />
+          <stop offset="1" stopColor="#78510e" />
+        </linearGradient>
+      </defs>
+    </svg>
+  )
 }
 
 export function CalculatorIcon({ size = 18, className }: IconProps) {

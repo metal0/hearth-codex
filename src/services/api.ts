@@ -228,4 +228,6 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings),
     }),
+
+  getShopBundles: () => fetchJson<import('./shopTypes.ts').ShopResponse>('/shop/bundles'),
 };

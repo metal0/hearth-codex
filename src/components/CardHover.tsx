@@ -1,18 +1,19 @@
 import { useState, useCallback, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore } from '../stores/store.ts'
+import type { CollectionMode } from '../types.ts'
 
 interface CardHoverProps {
   id: string
   name: string
+  variant?: CollectionMode
   className?: string
   style?: React.CSSProperties
   children?: React.ReactNode
 }
 
-export default function CardHover({ id, name, className, style, children }: CardHoverProps) {
+export default function CardHover({ id, name, variant = 'normal', className, style, children }: CardHoverProps) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
-  const collectionMode = useStore(s => s.collectionMode)
   const av = useStore(s => s.artVersion)
 
   useEffect(() => () => setPos(null), [])
@@ -33,10 +34,7 @@ export default function CardHover({ id, name, className, style, children }: Card
 
   const a = (v: string) => `/art/${id}_${v}.png?v=${av}`
   const baseUrl = a('normal')
-  const imgUrl = collectionMode === 'golden' ? a('golden')
-    : collectionMode === 'signature' ? a('signature')
-    : collectionMode === 'diamond' ? a('diamond')
-    : baseUrl
+  const imgUrl = variant !== 'normal' ? a(variant) : baseUrl
 
   return (
     <span

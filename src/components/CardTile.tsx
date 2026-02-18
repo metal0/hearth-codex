@@ -26,7 +26,7 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
     if (isVariant) {
       const timer = setTimeout(() => {
         if (!loadedRef.current) setImgSrc(fallbackRef.current)
-      }, 5000)
+      }, 1500)
       return () => clearTimeout(timer)
     }
   }, [card.imageUrl, card.id])
@@ -35,7 +35,7 @@ export default function CardTile({ card, onClick }: { card: EnrichedCard; onClic
     if (!isVariant || loadedRef.current) return
     if (!imgSrc.includes('_normal.png')) return
     let cancelled = false
-    const delays = [10000, 30000]
+    const delays = [3000, 8000]
 
     function scheduleRetry() {
       if (cancelled || retryRef.current >= delays.length) return

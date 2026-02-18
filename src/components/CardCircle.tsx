@@ -1,4 +1,5 @@
 import CardHover from './CardHover.tsx'
+import { useStore } from '../stores/store.ts'
 
 export const RARITY_BORDER_COLORS: Record<string, string> = {
   LEGENDARY: '#ff8000',
@@ -33,6 +34,7 @@ export function CardCircle({ id, rarity, size = 48, missing, count, className }:
   count?: number
   className?: string
 }) {
+  const av = useStore(s => s.artVersion)
   const borderColor = RARITY_BORDER_COLORS[rarity] ?? '#555'
   const borderWidth = size >= 40 ? 2.5 : size >= 24 ? 2 : 1.5
   const innerWidth = size >= 40 ? 1.5 : 1
@@ -44,7 +46,7 @@ export function CardCircle({ id, rarity, size = 48, missing, count, className }:
         style={{
           width: size,
           height: size,
-          backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${id}.jpg)`,
+          backgroundImage: `url(/art/${id}_normal.png?v=${av})`,
           backgroundSize: '140%',
           backgroundPosition: 'center 30%',
           border: `${borderWidth}px solid ${borderColor}`,

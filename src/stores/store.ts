@@ -14,6 +14,9 @@ import {
   clearCollectionOnlyData, type AuthTier,
 } from '../services/api.ts';
 
+type SyncResult = { success: boolean; cards?: number; dust?: number; error?: string }
+let pendingSyncPromise: Promise<SyncResult> | null = null
+
 function craftQueueKey(): string {
   const acct = getStoredAccountId();
   return acct ? `hs-craft-queue-${acct}` : 'hs-craft-queue';
@@ -328,34 +331,43 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   syncCollection: async (sessionId?: string) => {
-    set({ syncLoading: true });
-    try {
-      if (get().authTier === 'full') {
-        const result = await api.syncCollection(sessionId);
-        if (result.success) {
-          await get().fetchCollection();
-          set({ collectionSyncedAt: Date.now() });
-          return { success: true, cards: result.cards, dust: result.dust };
+    if (pendingSyncPromise) return pendingSyncPromise;
+    const doSync = async (): Promise<SyncResult> => {
+      set({ syncLoading: true, collectionSyncedAt: Date.now() });
+      try {
+        if (get().authTier === 'full') {
+          const result = await api.syncCollection(sessionId);
+          if (result.success) {
+            await get().fetchCollection();
+            set({ collectionSyncedAt: Date.now() });
+            return { success: true, cards: result.cards, dust: result.dust };
+          }
+          return { success: false, error: 'Sync returned unsuccessful' };
+        } else {
+          const meta = getCollectionMeta();
+          if (!meta) return { success: false, error: 'No collection URL configured' };
+          const result = await api.publicSync(meta.region, meta.accountLo);
+          if (result.success) {
+            if (!result.collection || Object.keys(result.collection).length === 0) {
+              return { success: false, error: 'Server returned empty collection' };
+            }
+            const collectionData: CollectionData = { collection: result.collection, dust: result.dust, syncedAt: result.syncedAt };
+            setLocalCollection(collectionData);
+            set({ collection: collectionData, collectionSyncedAt: result.syncedAt });
+            return { success: true, cards: result.cards, dust: result.dust };
+          }
+          return { success: false, error: 'Sync returned unsuccessful' };
         }
-        return { success: false, error: 'Sync returned unsuccessful' };
-      } else {
-        const meta = getCollectionMeta();
-        if (!meta) return { success: false, error: 'No collection URL configured' };
-        const result = await api.publicSync(meta.region, meta.accountLo);
-        if (result.success) {
-          const collectionData: CollectionData = { collection: result.collection, dust: result.dust, syncedAt: result.syncedAt };
-          setLocalCollection(collectionData);
-          set({ collection: collectionData, collectionSyncedAt: result.syncedAt });
-          return { success: true, cards: result.cards, dust: result.dust };
-        }
-        return { success: false, error: 'Sync returned unsuccessful' };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return { success: false, error: message };
+      } finally {
+        set({ syncLoading: false });
+        pendingSyncPromise = null;
       }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      return { success: false, error: message };
-    } finally {
-      set({ syncLoading: false });
-    }
+    };
+    pendingSyncPromise = doSync();
+    return pendingSyncPromise;
   },
 
   runCalculator: async (expansionCodes: string[], dust: number, metaOnly?: boolean) => {

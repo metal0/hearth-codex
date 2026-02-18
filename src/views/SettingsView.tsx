@@ -150,7 +150,7 @@ export default function SettingsView() {
               onChange={e => setUpgradeInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleUpgrade()}
               className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm
-                         font-mono text-gray-300 placeholder:text-gray-600
+                         font-mono text-gray-300 placeholder:text-gray-400
                          focus:outline-none focus:border-amber-500/50"
             />
             <button
@@ -199,7 +199,7 @@ export default function SettingsView() {
                 onChange={e => setSessionInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleReauth()}
                 className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-sm
-                           font-mono text-gray-300 placeholder:text-gray-600
+                           font-mono text-gray-300 placeholder:text-gray-400
                            focus:outline-none focus:border-gold/50"
               />
               <button
@@ -384,7 +384,7 @@ export default function SettingsView() {
               <span className="text-green-400">{cacheStats.cached.toLocaleString()} cached</span>
               <span className="text-gray-500">{cacheStats.missed.toLocaleString()} unavailable</span>
               {cacheStats.totalCards > 0 && (
-                <span className="text-gray-600">{(cacheStats.totalCards * 4).toLocaleString()} total</span>
+                <span className="text-gray-400">{(cacheStats.totalCards * 4).toLocaleString()} total</span>
               )}
             </div>
             {cacheStats.variants && (
@@ -399,14 +399,14 @@ export default function SettingsView() {
                   return (
                     <div key={v} className="bg-white/5 rounded px-2 py-1.5">
                       <div className={`font-medium ${color}`}>{label}</div>
-                      <div className="text-gray-400">{s.cached.toLocaleString()} <span className="text-gray-600">cached</span></div>
-                      <div className="text-gray-500">{s.missed.toLocaleString()} <span className="text-gray-600">miss</span></div>
+                      <div className="text-gray-400">{s.cached.toLocaleString()} <span className="text-gray-400">cached</span></div>
+                      <div className="text-gray-500">{s.missed.toLocaleString()} <span className="text-gray-400">miss</span></div>
                       {s.total > 0 && (
                         <div className="mt-1">
                           <div className="h-1 bg-white/5 rounded-full overflow-hidden">
                             <div className="h-full bg-green-500/40 rounded-full" style={{ width: `${pct}%` }} />
                           </div>
-                          <div className="text-gray-600 mt-0.5">{checked}/{s.total.toLocaleString()} ({pct}%)</div>
+                          <div className="text-gray-400 mt-0.5">{checked}/{s.total.toLocaleString()} ({pct}%)</div>
                         </div>
                       )}
                     </div>

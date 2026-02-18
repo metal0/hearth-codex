@@ -8,6 +8,7 @@ import CardHover from '../components/CardHover.tsx'
 import ClassPicker, { ClassIcon, classLabel } from '../components/ClassPicker.tsx'
 import RarityFilter from '../components/RarityFilter.tsx'
 import { Dropdown } from '../components/FilterBar.tsx'
+import AdvisorDisclaimer from '../components/AdvisorDisclaimer.tsx'
 
 interface DisenchantCandidate {
   card: EnrichedCard
@@ -271,6 +272,7 @@ export default function DisenchantAdvisorView() {
   }
 
   return (
+    <AdvisorDisclaimer>
     <div className="p-6 max-w-6xl">
       <div className="flex items-baseline gap-3 mb-6">
         <h1 className="text-xl font-bold text-gold">Disenchant</h1>
@@ -458,7 +460,7 @@ export default function DisenchantAdvisorView() {
                       top: 0,
                       bottom: 0,
                       width: 140,
-                      backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${c.card.id}.jpg)`,
+                      backgroundImage: `url(/art/${c.card.id}_normal.png)`,
                       backgroundSize: '160%',
                       backgroundPosition: 'center 30%',
                       opacity: 0.45,
@@ -525,7 +527,7 @@ export default function DisenchantAdvisorView() {
       </div>
 
       {(excludedNoStats > 0 || excludedNoWinrate > 0) && (
-        <p className="text-xs text-gray-600 mt-3">
+        <p className="text-xs text-gray-400 mt-3">
           {[
             excludedNoStats > 0 && `${excludedNoStats} missing play rate`,
             excludedNoWinrate > 0 && `${excludedNoWinrate} missing winrate`,
@@ -577,5 +579,6 @@ export default function DisenchantAdvisorView() {
         </div>
       </details>
     </div>
+    </AdvisorDisclaimer>
   )
 }

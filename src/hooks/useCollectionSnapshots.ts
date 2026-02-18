@@ -91,6 +91,8 @@ export function useCollectionSnapshots() {
       expMap.set(card.set, exp)
     }
 
+    if (overallOwned === 0) return
+
     const snapshot: CollectionSnapshot = {
       timestamp: collectionSyncedAt,
       dust: collection.dust ?? 0,

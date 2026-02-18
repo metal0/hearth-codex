@@ -161,7 +161,7 @@ export default function CollectionHeatmap() {
                           {cell.owned}/{cell.total}
                         </span>
                       ) : (
-                        <span className="text-gray-700">—</span>
+                        <span className="text-gray-500">—</span>
                       )}
                     </td>
                   )

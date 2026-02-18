@@ -10,6 +10,7 @@ import ClassPicker, { ClassIcon, classLabel } from '../components/ClassPicker.ts
 import RarityFilter from '../components/RarityFilter.tsx'
 import { Dropdown } from '../components/FilterBar.tsx'
 import { useRotationInfo } from '../hooks/useRotationInfo.ts'
+import AdvisorDisclaimer from '../components/AdvisorDisclaimer.tsx'
 
 export default function CraftAdvisorView() {
   const getEnrichedCards = useStore(s => s.getEnrichedCards)
@@ -188,6 +189,7 @@ export default function CraftAdvisorView() {
   }
 
   return (
+    <AdvisorDisclaimer>
     <div className="p-6 max-w-6xl">
       <div className="flex items-baseline gap-3 mb-6">
         <h1 className="text-xl font-bold text-gold">Crafting</h1>
@@ -212,7 +214,7 @@ export default function CraftAdvisorView() {
               ) : (
                 <span className="text-red-400">{(queueDust - dust).toLocaleString()} short</span>
               )}
-              <span className="text-gray-600">{showQueue ? '\u25B2' : '\u25BC'}</span>
+              <span className="text-gray-400">{showQueue ? '\u25B2' : '\u25BC'}</span>
             </span>
           </button>
 
@@ -252,7 +254,7 @@ export default function CraftAdvisorView() {
                   <span className="text-gray-400">
                     Total: <span className="text-mana font-medium">{queueDust.toLocaleString()}</span> dust
                   </span>
-                  <span className="text-gray-600">|</span>
+                  <span className="text-gray-400">|</span>
                   <span className="text-gray-400">
                     Available: <span className="text-white font-medium">{dust.toLocaleString()}</span>
                   </span>
@@ -438,7 +440,7 @@ export default function CraftAdvisorView() {
                         top: 0,
                         bottom: 0,
                         width: 140,
-                        backgroundImage: `url(https://art.hearthstonejson.com/v1/256x/${card.id}.jpg)`,
+                        backgroundImage: `url(/art/${card.id}_normal.png)`,
                         backgroundSize: '160%',
                         backgroundPosition: 'center 30%',
                         opacity: 0.45,
@@ -515,5 +517,6 @@ export default function CraftAdvisorView() {
         )}
       </div>
     </div>
+    </AdvisorDisclaimer>
   )
 }

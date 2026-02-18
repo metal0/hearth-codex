@@ -104,7 +104,7 @@ function OwnershipRow({ label, owned, count, color, tooltip }: {
         <span className={color}>{label}</span>
         {count > 1 && <span className="text-gray-500">x{count}</span>}
         {tooltip && (
-          <svg className="w-3 h-3 text-gray-600 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <svg className="w-3 h-3 text-gray-400 ml-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         )}
@@ -138,7 +138,7 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
   const hasSignature = card.hasSignature ?? false
   const hasDiamond = card.hasDiamond ?? false
   const isLegendary = card.rarity === 'LEGENDARY'
-  const sigEligible = (expansion?.yearNum ?? 0) >= 2022
+
 
   type ArtVariant = 'normal' | 'golden' | 'signature' | 'diamond'
   const artVariants: { key: ArtVariant; label: string; color: string }[] = [
@@ -419,9 +419,9 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
               <span style={{ color: RARITY_COLORS[card.rarity] }} className="font-medium">
                 {card.rarity[0] + card.rarity.slice(1).toLowerCase()}
               </span>
-              <span className="text-gray-600">&middot;</span>
+              <span className="text-gray-400">&middot;</span>
               <span className="text-gray-400">{card.cardClass[0] + card.cardClass.slice(1).toLowerCase()}</span>
-              <span className="text-gray-600">&middot;</span>
+              <span className="text-gray-400">&middot;</span>
               <span className="text-gray-400">{card.type[0] + card.type.slice(1).toLowerCase()}</span>
             </div>
             <div className="text-xs text-gray-500 mt-1">
@@ -456,7 +456,7 @@ export default function CardModal({ card, onClose }: { card: EnrichedCard; onClo
                 </span>
               )}
             </div>
-            <p className="text-[10px] text-gray-600 mt-1">Hover a row for pull chances</p>
+            <p className="text-[10px] text-gray-400 mt-1">Hover a row for pull chances</p>
           </div>
 
           <div className="border-t border-white/10 pt-4">

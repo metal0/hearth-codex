@@ -150,7 +150,7 @@ export default function OnboardingPopup({ onComplete }: Props) {
                 {loading ? 'Loading collection...' : 'View Collection'}
               </button>
 
-              <p className="text-[11px] text-gray-600 text-center">
+              <p className="text-[11px] text-gray-400 text-center">
                 Your collection data is stored locally in this browser only.
               </p>
             </div>
@@ -207,7 +207,7 @@ export default function OnboardingPopup({ onComplete }: Props) {
                 {loading ? 'Connecting...' : 'Connect Account'}
               </button>
 
-              <p className="text-[11px] text-gray-600 text-center">
+              <p className="text-[11px] text-gray-400 text-center">
                 Enables persistent settings, collection history, and premium stats.
                 Your session ID, battletag, and settings will be stored server-side.
               </p>

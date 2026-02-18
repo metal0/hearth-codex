@@ -1,7 +1,7 @@
 import { type ReactNode, useMemo, useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useStore } from '../stores/store.ts'
-import { CardIcon, CalculatorIcon, CraftIcon, PackAdvisorIcon, DecksIcon, DustIcon, HistoryIcon, RarityGem } from './Icons.tsx'
+import { CardIcon, CalculatorIcon, CraftIcon, PackAdvisorIcon, DecksIcon, DustIcon, HistoryIcon, RarityGem, StoreIcon } from './Icons.tsx'
 import { RARITY_COLORS, DUST_COST, DUST_DISENCHANT, DUST_DISENCHANT_GOLDEN } from '../types.ts'
 import type { Rarity, CollectionMode } from '../types.ts'
 import { useRotationInfo } from '../hooks/useRotationInfo.ts'
@@ -13,6 +13,7 @@ const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/packs', label: 'Packs', icon: <PackAdvisorIcon size={16} /> },
   { to: '/decks', label: 'Decks', icon: <DecksIcon size={16} /> },
   { to: '/disenchant', label: 'Disenchant', icon: <DustIcon size={16} /> },
+  { to: '/store', label: 'Store', icon: <StoreIcon size={16} /> },
   { to: '/history', label: 'History', icon: <HistoryIcon size={16} /> },
 ]
 

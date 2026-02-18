@@ -20,6 +20,7 @@ import {
 } from './data.ts';
 import { ensureCfReady, cfFetch, getCfStatus, clearCfSession } from './cloudflare.ts';
 import { initAuth, resolveUserByToken, createUser, updateSessionId, getAllUsers, purgeInactiveUsers, findUserByAccount, deleteUser, type TokenData } from './auth.ts';
+import { fetchShopBundles, getCacheAge } from './shop.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -271,7 +272,7 @@ if (HOSTED_MODE) {
   const HOSTED_BLOCKED = new Set(['/cards/refresh', '/card-art/clear-cache', '/cf/solve', '/meta/refresh']);
   const AUTH_EXEMPT = new Set(['/auth/register', '/auth/collection-login', '/collection/public-sync', '/health']);
   const PUBLIC_PATHS = new Set(['/data-status', '/cards', '/expansions', '/meta', '/meta/brackets', '/cf/status', '/card-art/cache-stats']);
-  const PUBLIC_PREFIXES = ['/decks', '/card-art/'];
+  const PUBLIC_PREFIXES = ['/decks', '/card-art/', '/shop'];
   function isPublicPath(path: string): boolean {
     if (PUBLIC_PATHS.has(path)) return true;
     return PUBLIC_PREFIXES.some(p => path.startsWith(p));
@@ -305,7 +306,22 @@ app.get('/art/:filename', async (req, res) => {
   if (!sourceFn) { res.status(400).end(); return; }
 
   const cacheKey = `${cardId}_${variant}`;
+  const cacheFile = join(CARD_ART_CACHE, `${cacheKey}.png`);
+  const lowFile = join(CARD_ART_CACHE, `${cacheKey}.low.png`);
   const missFile = join(CARD_ART_CACHE, `${cacheKey}.miss`);
+
+  if (existsSync(cacheFile)) {
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(readFileSync(cacheFile));
+    return;
+  }
+  if (existsSync(lowFile)) {
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=60');
+    res.send(readFileSync(lowFile));
+    return;
+  }
   if (existsSync(missFile)) {
     res.set('Cache-Control', 'no-cache');
     res.status(404).end();
@@ -315,7 +331,8 @@ app.get('/art/:filename', async (req, res) => {
   const buffer = await fetchAndCacheArt(cacheKey, sourceFn(cardId));
   if (buffer) {
     res.set('Content-Type', 'image/png');
-    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    const isHq = existsSync(cacheFile);
+    res.set('Cache-Control', isHq ? 'public, max-age=31536000, immutable' : 'public, max-age=60');
     res.send(buffer);
   } else {
     res.set('Cache-Control', 'no-store');
@@ -1725,12 +1742,16 @@ app.get('/api/snapshots', authenticateUser, (req: AuthRequest, res) => {
 });
 
 app.post('/api/snapshots', authenticateUser, (req: AuthRequest, res) => {
+  const snapshot = req.body;
+  if (!snapshot?.overall?.owned || snapshot.overall.owned === 0) {
+    res.status(400).json({ error: 'Refusing to save empty collection snapshot' });
+    return;
+  }
   const snapshotsPath = join(req.userDir!, 'snapshots.json');
   let existing: unknown[] = [];
   if (existsSync(snapshotsPath)) {
     try { existing = JSON.parse(readFileSync(snapshotsPath, 'utf-8')); } catch { /* empty */ }
   }
-  const snapshot = req.body;
   const deduped = (existing as Array<{ timestamp: number }>).filter(s => s.timestamp !== snapshot.timestamp);
   const updated = [...deduped, snapshot]
     .sort((a, b) => a.timestamp - b.timestamp)
@@ -1744,6 +1765,39 @@ app.delete('/api/snapshots', authenticateUser, (req: AuthRequest, res) => {
   if (existsSync(snapshotsPath)) unlinkSync(snapshotsPath);
   res.json({ cleared: true });
 });
+
+// ── Shop Advisor ─────────────────────────────────────────
+
+app.get('/api/shop/bundles', optionalAuth, async (req: AuthRequest, res) => {
+  try {
+    let collection: Record<string, number[]> | null = null;
+    if (req.userDir) {
+      const collPath = join(req.userDir, 'collection.json');
+      if (existsSync(collPath)) {
+        const raw = JSON.parse(readFileSync(collPath, 'utf-8'));
+        collection = raw.collection ?? null;
+      }
+    }
+
+    const meta = loadMetaCache();
+    const cardDb = loadCardDb();
+    const expansions = getAllExpansions();
+
+    const bundles = await fetchShopBundles(
+      collection, meta.standard as Record<string, { popularity: number; winrate: number }>,
+      meta.wild as Record<string, { popularity: number; winrate: number }>,
+      cardDb, expansions, null,
+    );
+
+    const cacheAge = getCacheAge();
+    res.json({ bundles, cacheAgeMs: cacheAge });
+  } catch (err: unknown) {
+    console.error('[Shop] Error fetching bundles:', err);
+    const message = err instanceof Error ? err.message : 'Failed to fetch shop data';
+    res.status(500).json({ error: message });
+  }
+});
+
 
 const pendingArtFetches = new Map<string, Promise<Buffer | null>>();
 
@@ -2190,6 +2244,47 @@ async function prefetchCardArt(db: CardDb): Promise<void> {
 
   prefetchProgress.running = false;
   console.log('[Prefetch] Card art prefetching complete');
+
+  retryMisses(db).catch(err => console.error('[Prefetch] Miss retry error:', err));
+}
+
+async function retryMisses(db: CardDb): Promise<void> {
+  const MAX_ROUNDS = 3;
+  const ROUND_DELAY = 5 * 60 * 1000;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    await new Promise(r => setTimeout(r, ROUND_DELAY));
+
+    const missFiles = readdirSync(CARD_ART_CACHE).filter(f => f.endsWith('.miss'));
+    if (missFiles.length === 0) {
+      console.log('[Prefetch] No misses remaining');
+      return;
+    }
+
+    console.log(`[Prefetch] Miss retry round ${round + 1}: ${missFiles.length} misses`);
+
+    const tasks: PrefetchTask[] = [];
+    for (const f of missFiles) {
+      const cacheKey = f.replace(/\.miss$/, '');
+      const variant = variantFromCacheKey(cacheKey);
+      const sourceFn = ART_SOURCES[variant];
+      if (!sourceFn) continue;
+      const cardId = cacheKey.slice(0, cacheKey.lastIndexOf('_'));
+      unlinkSync(join(CARD_ART_CACHE, f));
+      tasks.push({ cacheKey, url: sourceFn(cardId) });
+    }
+
+    if (tasks.length === 0) return;
+
+    const stats = await prefetchBatch(tasks, 2, 1000);
+    console.log(`[Prefetch] Miss retry ${round + 1}: ${stats.fetched} recovered, ${stats.notFound.length} still missing`);
+
+    for (const task of stats.notFound) {
+      writeFileSync(join(CARD_ART_CACHE, `${task.cacheKey}.miss`), '');
+    }
+
+    if (stats.notFound.length === 0) return;
+  }
 }
 
 const SYNC_INTERVAL = 12 * 60 * 60 * 1000;
@@ -2267,6 +2362,8 @@ function buildSnapshot(collection: Record<string, number[]>, dust: number, db: C
 }
 
 function saveSnapshotForUser(userDir: string, snapshot: object): boolean {
+  const snap = snapshot as any;
+  if (!snap.overall?.owned || snap.overall.owned === 0) return false;
   const snapshotsPath = join(userDir, 'snapshots.json');
   let existing: unknown[] = [];
   if (existsSync(snapshotsPath)) {
