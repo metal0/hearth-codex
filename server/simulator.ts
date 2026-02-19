@@ -1,5 +1,25 @@
 import type { ExpansionCollectionState, RarityState } from './data.ts';
 
+function mulberry32(seed: number): () => number {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+let rng = Math.random;
+
+function seedFromState(c: ExpansionCollectionState, dust: number): number {
+  return (c.commons.at0 * 7 + c.commons.at1 * 13 + c.commons.at2 * 17
+    + c.rares.at0 * 31 + c.rares.at1 * 37 + c.rares.at2 * 41
+    + c.epics.at0 * 61 + c.epics.at1 * 67 + c.epics.at2 * 71
+    + c.legendaries.unowned * 127 + c.legendaries.owned * 131
+    + dust * 3) | 0;
+}
+
 const DUST_DISENCHANT = { common: 5, rare: 20, epic: 100, legendary: 400 } as const;
 const DUST_DISENCHANT_GOLDEN = { common: 50, rare: 100, epic: 400, legendary: 1600 } as const;
 const DUST_CRAFT = { common: 40, rare: 100, epic: 400, legendary: 1600 } as const;
@@ -53,7 +73,7 @@ function softPityChance(packsSince: number, softStart: number, hardCap: number):
 }
 
 function rollCard(): Card {
-  const r = Math.random();
+  const r = rng();
   for (let i = 0; i < CDF.length; i++) {
     if (r < CDF[i]) return { rarity: RARITY_WEIGHTS[i].rarity, golden: RARITY_WEIGHTS[i].golden };
   }
@@ -99,7 +119,7 @@ function generatePack(pity: PityState): Card[] {
 
   if (!hasNormalLegendary) {
     const pityChance = softPityChance(nextLegCount, legendarySoftStart, legendaryHardCap);
-    if (pityChance >= 1 || (pityChance > 0 && Math.random() < pityChance)) {
+    if (pityChance >= 1 || (pityChance > 0 && rng() < pityChance)) {
       upgradeLowestCard(cards, 'legendary');
     }
   }
@@ -109,7 +129,7 @@ function generatePack(pity: PityState): Card[] {
   );
   if (!hasEpicAfterLegPity) {
     const pityChance = softPityChance(nextEpicCount, EPIC_SOFT_START, EPIC_HARD_CAP);
-    if (pityChance >= 1 || (pityChance > 0 && Math.random() < pityChance)) {
+    if (pityChance >= 1 || (pityChance > 0 && rng() < pityChance)) {
       upgradeLowestCard(cards, 'epic');
     }
   }
@@ -177,7 +197,7 @@ function addNormalCard(s: SimState, rarity: Rarity): void {
     return;
   }
 
-  const roll = Math.random() * incomplete;
+  const roll = rng() * incomplete;
   if (roll < pool.at0) {
     pool.at0--;
     pool.at1++;
@@ -302,7 +322,7 @@ function addNormalCardReturnDust(s: SimState, rarity: Rarity): number {
 
   if (incomplete === 0) return DUST_DISENCHANT[rarity];
 
-  const roll = Math.random() * incomplete;
+  const roll = rng() * incomplete;
   if (roll < pool.at0) {
     pool.at0--;
     pool.at1++;
@@ -402,7 +422,7 @@ function simulateMultiExpansionRun(
   const MAX_PACKS = 20000;
 
   while (!allComplete(states) && packs < MAX_PACKS) {
-    const idx = Math.floor(Math.random() * N);
+    const idx = Math.floor(rng() * N);
     const pack = generatePack(pities[idx]);
     packs++;
 
@@ -447,6 +467,9 @@ export function simulateMultiExpansion(
   isNewPerExpansion: boolean[],
   runs: number = 200,
 ): SimStats {
+  let seed = dust * 3;
+  for (const c of collections) seed = (seed + seedFromState(c, 0)) | 0;
+  rng = mulberry32(seed);
   const results: number[] = [];
 
   for (let i = 0; i < runs; i++) {
@@ -491,6 +514,7 @@ export function simulate(
   runs: number = 200,
   isNewExpansion: boolean = false,
 ): SimulationResult {
+  rng = mulberry32(seedFromState(collection, dust));
   if (isComplete(cloneState(collection, 0))) {
     return {
       expansion: collection.expansion.name,
