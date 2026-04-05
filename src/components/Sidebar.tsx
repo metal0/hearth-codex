@@ -5,6 +5,7 @@ import { CardIcon, CalculatorIcon, CraftIcon, PackAdvisorIcon, DecksIcon, DustIc
 import { RARITY_COLORS, DUST_COST, DUST_DISENCHANT, DUST_DISENCHANT_GOLDEN } from '../types.ts'
 import type { Rarity, CollectionMode } from '../types.ts'
 import { useRotationInfo } from '../hooks/useRotationInfo.ts'
+import { DISENCHANT_DISMISSED_EVENT, disenchantDismissKey, loadDisenchantDismissed } from '../lib/disenchantDismissed.ts'
 
 const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/', label: 'Collection', icon: <CardIcon size={16} /> },
@@ -237,9 +238,16 @@ export default function Sidebar() {
   const battletag = useStore(s => s.battletag)
   const logout = useStore(s => s.logout)
   const authTier = useStore(s => s.authTier)
+  const [dismissedDisenchant, setDismissedDisenchant] = useState<Set<string>>(loadDisenchantDismissed)
 
   const [logoutConfirm, setLogoutConfirm] = useState(false)
   const rotationInfo = useRotationInfo(expansions)
+
+  useEffect(() => {
+    const syncDismissed = () => setDismissedDisenchant(loadDisenchantDismissed())
+    window.addEventListener(DISENCHANT_DISMISSED_EVENT, syncDismissed)
+    return () => window.removeEventListener(DISENCHANT_DISMISSED_EVENT, syncDismissed)
+  }, [])
 
   const stats = useMemo(() => {
     const standardCodes = new Set(expansions.filter(e => e.standard).map(e => e.code))
@@ -361,8 +369,18 @@ export default function Sidebar() {
         if (deNormalAvail > 0 || deGoldenAvail > 0) {
           const isInCore = card.aliasDbfIds?.some((a: string) => cards[a]?.set === 'CORE') ?? false
           const addDE = (n: number, g: number) => {
-            if (n > 0) { const d = DUST_DISENCHANT[rarity] * n; disenchantByRarity[rarity].count += n; disenchantByRarity[rarity].dust += d; totalDisenchant += d }
-            if (g > 0) { const d = DUST_DISENCHANT_GOLDEN[rarity] * g; disenchantByRarity[rarity].count += g; disenchantByRarity[rarity].dust += d; totalDisenchant += d }
+            if (n > 0 && !dismissedDisenchant.has(disenchantDismissKey(dbfId, 'normal'))) {
+              const d = DUST_DISENCHANT[rarity] * n
+              disenchantByRarity[rarity].count += n
+              disenchantByRarity[rarity].dust += d
+              totalDisenchant += d
+            }
+            if (g > 0 && !dismissedDisenchant.has(disenchantDismissKey(dbfId, 'golden'))) {
+              const d = DUST_DISENCHANT_GOLDEN[rarity] * g
+              disenchantByRarity[rarity].count += g
+              disenchantByRarity[rarity].dust += d
+              totalDisenchant += d
+            }
           }
 
           const stdE = bestMeta(metaStandard, dbfId, card.aliasDbfIds)
@@ -416,7 +434,7 @@ export default function Sidebar() {
       disenchantByRarity,
       totalDisenchant,
     }
-  }, [cards, collection, expansions, barMode, metaStandard, metaWild])
+  }, [cards, collection, expansions, barMode, metaStandard, metaWild, dismissedDisenchant])
 
   const dustStats: DustStats = {
     totalOwnedDust: dust,

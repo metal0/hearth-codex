@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useStore } from '../stores/store.ts'
 import { DUST_DISENCHANT, DUST_DISENCHANT_GOLDEN, CLASS_COLORS, bracketLabel } from '../types.ts'
 import { DustIcon } from '../components/Icons.tsx'
@@ -9,6 +9,7 @@ import ClassPicker, { ClassIcon, classLabel } from '../components/ClassPicker.ts
 import RarityFilter from '../components/RarityFilter.tsx'
 import { Dropdown } from '../components/FilterBar.tsx'
 import AdvisorDisclaimer from '../components/AdvisorDisclaimer.tsx'
+import { disenchantDismissKey, loadDisenchantDismissed, saveDisenchantDismissed } from '../lib/disenchantDismissed.ts'
 
 interface DisenchantCandidate {
   card: EnrichedCard
@@ -26,6 +27,10 @@ interface DisenchantCandidate {
 }
 
 type SortCol = 'name' | 'variant' | 'set' | 'dust' | 'played' | 'winrate' | 'safety'
+
+function candidateKey(candidate: Pick<DisenchantCandidate, 'card' | 'variant'>): string {
+  return disenchantDismissKey(candidate.card.dbfId, candidate.variant)
+}
 
 function safetyColor(safety: number): string {
   if (safety >= 90) return 'text-green-400'
@@ -77,6 +82,20 @@ export default function DisenchantAdvisorView() {
   const [maxWinrate, setMaxWinrate] = useState(45)
   const [minSafety, setMinSafety] = useState(80)
   const [hideNoWinrate, setHideNoWinrate] = useState(false)
+  const [showCoreDuplicates, setShowCoreDuplicates] = useState(true)
+  const [dismissed, setDismissed] = useState<Set<string>>(loadDisenchantDismissed)
+  const [showDismissed, setShowDismissed] = useState(false)
+
+  const toggleDismiss = useCallback((candidate: Pick<DisenchantCandidate, 'card' | 'variant'>) => {
+    const id = candidateKey(candidate)
+    setDismissed(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      saveDisenchantDismissed(next)
+      return next
+    })
+  }, [])
 
   const setOptions = useMemo(() => [
     { value: '', label: 'All Sets' },
@@ -210,7 +229,7 @@ export default function DisenchantAdvisorView() {
     return order
   }, [expansions])
 
-  const filtered = useMemo(() => {
+  const baseFiltered = useMemo(() => {
     let items = candidates.filter(c => c.safety >= minSafety)
 
     if (selectedRarities.length > 0) {
@@ -224,6 +243,10 @@ export default function DisenchantAdvisorView() {
 
     if (selectedSet) {
       items = items.filter(c => c.card.set === selectedSet)
+    }
+
+    if (!showCoreDuplicates) {
+      items = items.filter(c => !c.coreWarning)
     }
 
     const dir = sortAsc ? 1 : -1
@@ -250,7 +273,22 @@ export default function DisenchantAdvisorView() {
     })
 
     return items
-  }, [candidates, minSafety, selectedRarities, selectedClass, selectedSet, sortCol, sortAsc, setOrder])
+  }, [candidates, minSafety, selectedRarities, selectedClass, selectedSet, showCoreDuplicates, sortCol, sortAsc, setOrder])
+
+  const filtered = useMemo(
+    () => baseFiltered.filter(c => !dismissed.has(candidateKey(c))),
+    [baseFiltered, dismissed],
+  )
+
+  const displayed = useMemo(
+    () => showDismissed ? baseFiltered : filtered,
+    [baseFiltered, filtered, showDismissed],
+  )
+
+  const dismissedCount = useMemo(
+    () => baseFiltered.filter(c => dismissed.has(candidateKey(c))).length,
+    [baseFiltered, dismissed],
+  )
 
   const summary = useMemo(() => {
     const totalDust = filtered.reduce((s, c) => s + c.dustValue, 0)
@@ -312,6 +350,30 @@ export default function DisenchantAdvisorView() {
         >
           Hide No WR
         </button>
+
+        <button
+          onClick={() => setShowCoreDuplicates(!showCoreDuplicates)}
+          className={`px-3 py-1.5 rounded text-xs border transition-colors ${
+            showCoreDuplicates
+              ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+              : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
+          }`}
+          title="Show or hide suggestions for cards currently granted by Core set"
+        >
+          Core Duplicates
+        </button>
+
+        {dismissedCount > 0 && (
+          <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showDismissed}
+              onChange={e => setShowDismissed(e.target.checked)}
+              className="accent-gold"
+            />
+            Dismissed ({dismissedCount})
+          </label>
+        )}
 
         <span className="text-xs text-gray-500 ml-auto">
           {filtered.length} disenchant candidates
@@ -434,11 +496,14 @@ export default function DisenchantAdvisorView() {
                 Safety{sortIndicator('safety')}
               </th>
               <th className="text-left px-4 py-3">Reason</th>
+              <th className="w-16 px-2 py-3" />
             </tr>
           </thead>
           <tbody>
-            {filtered.slice(0, 300).map((c, i) => (
-              <tr key={`${c.card.dbfId}-${c.variant}-${i}`} className="border-b border-white/5 hover:bg-white/5" style={{ height: 40 }}>
+            {displayed.slice(0, 300).map((c) => {
+              const isDismissed = dismissed.has(candidateKey(c))
+              return (
+              <tr key={candidateKey(c)} className={`border-b border-white/5 ${isDismissed ? 'opacity-40' : 'hover:bg-white/5'}`} style={{ height: 40 }}>
                 <td className="pl-2 pr-1 py-2">
                   <span
                     className="flex items-center justify-center w-8 h-8 rounded-full"
@@ -510,18 +575,26 @@ export default function DisenchantAdvisorView() {
                     )}
                   </span>
                 </td>
+                <td className="px-2 py-2 text-center">
+                  <button
+                    onClick={() => toggleDismiss(c)}
+                    className="text-[10px] text-gray-400 hover:text-red-400 transition-colors"
+                  >
+                    {isDismissed ? 'Restore' : 'Dismiss'}
+                  </button>
+                </td>
               </tr>
-            ))}
+            )})}
           </tbody>
         </table>
-        {filtered.length === 0 && (
+        {displayed.length === 0 && (
           <div className="px-4 py-8 text-center text-gray-500">
             No disenchant candidates found with current filters.
           </div>
         )}
-        {filtered.length > 300 && (
+        {displayed.length > 300 && (
           <div className="px-4 py-3 text-xs text-gray-500 border-t border-white/5">
-            Showing first 300 of {filtered.length} candidates
+            Showing first 300 of {displayed.length} candidates
           </div>
         )}
       </div>
