@@ -1,5 +1,5 @@
 import type { Expansion, CardDb, CollectionData, CalculatorResponse, MetaEntry } from '../types.ts';
-import { buildCollectionState, parseHsReplayCollection, emptyCollectionState, computeMetaMissing } from '../lib/collection.ts';
+import { buildCollectionState, emptyCollectionState, computeMetaMissing } from '../lib/collection.ts';
 import { simulate, simulateMeta, simulateMultiExpansion, calcGoldenPackAnalysis } from '../lib/simulator.ts';
 
 interface CalculatorMessage {
@@ -24,24 +24,21 @@ self.onmessage = (e: MessageEvent<CalculatorMessage>) => {
     .filter(exp => selectedCodes.has(exp.code))
     .sort((a, b) => a.code.localeCompare(b.code));
 
-  let normalOwned: Map<string, number> | null = null;
-  if (collection?.collection) {
-    normalOwned = parseHsReplayCollection(collection.collection);
-  }
+  const rawCollection = collection?.collection ?? null
 
   const collectionStates = [];
   const isNewFlags: boolean[] = [];
   const results = [];
 
   for (const exp of expansions) {
-    const state = normalOwned
-      ? buildCollectionState(exp, normalOwned, cardDb)
+    const state = rawCollection
+      ? buildCollectionState(exp, rawCollection, cardDb)
       : emptyCollectionState(exp);
     collectionStates.push(state);
     isNewFlags.push(state.legendaries.owned === 0);
 
     if (metaOnly) {
-      const metaMissing = computeMetaMissing(exp, cardDb, normalOwned, metaStandard, metaWild);
+      const metaMissing = computeMetaMissing(exp, cardDb, rawCollection, metaStandard, metaWild);
       results.push(simulateMeta(state, dust, metaMissing, runs, state.legendaries.owned === 0));
     } else {
       results.push(simulate(state, dust, runs, state.legendaries.owned === 0));

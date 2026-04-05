@@ -1,4 +1,4 @@
-import type { Expansion, CardDb, MetaEntry } from '../types.ts';
+import type { Expansion, CardDb, MetaEntry, CardDbEntry } from '../types.ts';
 import type { MetaMissing } from './simulator.ts';
 
 export interface RarityState {
@@ -15,9 +15,53 @@ export interface ExpansionCollectionState {
   legendaries: { unowned: number; owned: number };
 }
 
+function getEffectiveCounts(
+  dbfId: string,
+  card: CardDbEntry,
+  collection: Record<string, number[]> | null | undefined,
+  cardDb: CardDb,
+): { normal: number; golden: number; diamond: number; signature: number } {
+  let normal = card.freeNormal ? 1 : 0
+  let golden = card.freeGolden ? 1 : 0
+  let diamond = 0
+  let signature = 0
+
+  const mergeCounts = (counts?: number[]) => {
+    if (!counts) return
+    normal = Math.max(normal, counts[0] ?? 0)
+    golden = Math.max(golden, counts[1] ?? 0)
+    diamond = Math.max(diamond, counts[2] ?? 0)
+    signature = Math.max(signature, counts[3] ?? 0)
+  }
+
+  mergeCounts(collection?.[dbfId])
+
+  if (card.aliasDbfIds) {
+    for (const alias of card.aliasDbfIds) {
+      mergeCounts(collection?.[alias])
+      const aliasCard = cardDb[alias]
+      if (aliasCard?.freeNormal) normal = Math.max(normal, 1)
+      if (aliasCard?.freeGolden) golden = Math.max(golden, 1)
+    }
+  }
+
+  return { normal, golden, diamond, signature }
+}
+
+function getEffectiveOwnedCopies(
+  dbfId: string,
+  card: CardDbEntry,
+  collection: Record<string, number[]> | null | undefined,
+  cardDb: CardDb,
+): number {
+  const { normal, golden, diamond, signature } = getEffectiveCounts(dbfId, card, collection, cardDb)
+  const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2
+  return Math.min(normal + golden + diamond + signature, maxCopies)
+}
+
 export function buildCollectionState(
   expansion: Expansion,
-  ownedNormal: Map<string, number>,
+  collection: Record<string, number[]> | null | undefined,
   cardDb: CardDb,
 ): ExpansionCollectionState {
   let c0 = expansion.commons, c1 = 0, c2 = 0;
@@ -25,11 +69,10 @@ export function buildCollectionState(
   let e0 = expansion.epics, e1 = 0, e2 = 0;
   let lOwned = 0;
 
-  for (const [dbfId, count] of ownedNormal) {
-    const card = cardDb[dbfId];
+  for (const [dbfId, card] of Object.entries(cardDb)) {
     if (!card || card.set !== expansion.code) continue;
 
-    const clamped = Math.min(count, card.rarity === 'LEGENDARY' ? 1 : 2);
+    const clamped = getEffectiveOwnedCopies(dbfId, card, collection, cardDb)
 
     if (card.rarity === 'COMMON') {
       if (clamped >= 2) { c0--; c2++; }
@@ -64,21 +107,10 @@ export function emptyCollectionState(expansion: Expansion): ExpansionCollectionS
   };
 }
 
-export function parseHsReplayCollection(
-  collection: Record<string, number[]>,
-): Map<string, number> {
-  const normalOwned = new Map<string, number>();
-  for (const [dbfId, counts] of Object.entries(collection)) {
-    const normalCount = counts[0] ?? 0;
-    if (normalCount > 0) normalOwned.set(dbfId, normalCount);
-  }
-  return normalOwned;
-}
-
 export function computeMetaMissing(
   expansion: Expansion,
   cardDb: CardDb,
-  normalOwned: Map<string, number> | null,
+  collection: Record<string, number[]> | null | undefined,
   metaStd: Record<string, MetaEntry>,
   metaWild: Record<string, MetaEntry>,
 ): MetaMissing {
@@ -108,15 +140,8 @@ export function computeMetaMissing(
     const isMetaRelevant = best.popularity > 2 || (best.winrate > 50 && best.decks >= 100);
     if (!isMetaRelevant) continue;
 
-    let owned = normalOwned?.get(dbfId) ?? 0;
-    if (card.aliasDbfIds && normalOwned) {
-      for (const alias of card.aliasDbfIds) {
-        owned = Math.max(owned, normalOwned.get(alias) ?? 0);
-      }
-    }
-
+    const clamped = getEffectiveOwnedCopies(dbfId, card, collection, cardDb)
     const maxCopies = card.rarity === 'LEGENDARY' ? 1 : 2;
-    const clamped = Math.min(owned, maxCopies);
     if (clamped >= maxCopies) continue;
 
     const rarity = card.rarity.toLowerCase();

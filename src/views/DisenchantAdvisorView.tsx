@@ -285,6 +285,11 @@ export default function DisenchantAdvisorView() {
     [baseFiltered, filtered, showDismissed],
   )
 
+  const coreDuplicateCount = useMemo(
+    () => candidates.filter(c => c.coreWarning).length,
+    [candidates],
+  )
+
   const dismissedCount = useMemo(
     () => baseFiltered.filter(c => dismissed.has(candidateKey(c))).length,
     [baseFiltered, dismissed],
@@ -351,17 +356,22 @@ export default function DisenchantAdvisorView() {
           Hide No WR
         </button>
 
-        <button
-          onClick={() => setShowCoreDuplicates(!showCoreDuplicates)}
-          className={`px-3 py-1.5 rounded text-xs border transition-colors ${
-            showCoreDuplicates
+        <label
+          className={`flex items-center gap-1.5 text-xs cursor-pointer select-none rounded border px-3 py-1.5 transition-colors ${
+            !showCoreDuplicates
               ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
               : 'bg-white/5 text-gray-400 border-white/10 hover:bg-white/10'
           }`}
-          title="Show or hide suggestions for cards currently granted by Core set"
+          title="Hide suggestions for cards currently granted by the Core set"
         >
-          Core Duplicates
-        </button>
+          <input
+            type="checkbox"
+            checked={!showCoreDuplicates}
+            onChange={e => setShowCoreDuplicates(!e.target.checked)}
+            className="accent-gold"
+          />
+          Hide Core Copies{coreDuplicateCount > 0 ? ` (${coreDuplicateCount})` : ''}
+        </label>
 
         {dismissedCount > 0 && (
           <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
