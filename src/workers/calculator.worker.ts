@@ -19,7 +19,10 @@ self.onmessage = (e: MessageEvent<CalculatorMessage>) => {
     expansionCodes, expansions: allExpansions, cardDb, collection, dust, runs = 200,
     metaOnly, metaStandard = {}, metaWild = {},
   } = e.data;
-  const expansions = allExpansions.filter(exp => expansionCodes.includes(exp.code));
+  const selectedCodes = new Set(expansionCodes);
+  const expansions = allExpansions
+    .filter(exp => selectedCodes.has(exp.code))
+    .sort((a, b) => a.code.localeCompare(b.code));
 
   let normalOwned: Map<string, number> | null = null;
   if (collection?.collection) {

@@ -390,7 +390,7 @@ function DeckRow({ deck, expanded, onToggle, companionCards, showDustValue }: { 
                           top: 0,
                           height: '100%',
                           width: isCompanion ? artW - 10 : artW + 4,
-                          backgroundImage: `url(/art/${c.id}_normal.png)`,
+                          backgroundImage: `url(/art/${c.id}_normal-lg.png?v=${artVersion})`,
                           backgroundSize: '130%',
                           backgroundPosition: 'center 30%',
                           opacity: isCompanion ? 0.25 : missing > 0 ? 0.3 : 0.6,
@@ -828,7 +828,7 @@ function ArchetypeRow({
                                   className="absolute pointer-events-none z-[1]"
                                   style={{
                                     right: -2, top: 0, height: '100%', width: artW + 4,
-                                    backgroundImage: `url(/art/${c.id}_normal.png)`,
+                                    backgroundImage: `url(/art/${c.id}_normal-lg.png?v=${artVersion})`,
                                     backgroundSize: '130%', backgroundPosition: 'center 30%',
                                     opacity: missing > 0 ? 0.3 : 0.6,
                                     filter: missing > 0 ? 'grayscale(0.7)' : 'none',
@@ -907,7 +907,17 @@ function ArchetypeRow({
 
 type ViewMode = 'archetypes' | 'decks'
 
-function CardInclusionFilter({ cardDb, requiredCards, onChange }: { cardDb: CardDb; requiredCards: number[]; onChange: (cards: number[]) => void }) {
+function CardInclusionFilter({
+  cardDb,
+  requiredCards,
+  onChange,
+  allowedSetCodes,
+}: {
+  cardDb: CardDb
+  requiredCards: number[]
+  onChange: (cards: number[]) => void
+  allowedSetCodes: Set<string> | null
+}) {
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -929,6 +939,7 @@ function CardInclusionFilter({ cardDb, requiredCards, onChange }: { cardDb: Card
     const requiredSet = new Set(requiredCards)
     for (const [dbfId, card] of Object.entries(cardDb)) {
       if (requiredSet.has(Number(dbfId))) continue
+      if (allowedSetCodes && !allowedSetCodes.has(card.set)) continue
       if (card.name.toLowerCase().includes(q)) {
         results.push({ dbfId: Number(dbfId), id: card.id, name: card.name, cost: card.cost, rarity: card.rarity, cardClass: card.cardClass })
       }
@@ -940,7 +951,7 @@ function CardInclusionFilter({ cardDb, requiredCards, onChange }: { cardDb: Card
       return aStarts - bStarts || a.cost - b.cost || a.name.localeCompare(b.name)
     })
     return results
-  }, [query, cardDb, requiredCards])
+  }, [query, cardDb, requiredCards, allowedSetCodes])
 
   function addCard(dbfId: number) {
     onChange([...requiredCards, dbfId])
@@ -983,7 +994,7 @@ function CardInclusionFilter({ cardDb, requiredCards, onChange }: { cardDb: Card
                 <div
                   className="absolute inset-0 z-0 pointer-events-none opacity-30 group-hover:opacity-50"
                   style={{
-                    backgroundImage: `url(/art/${card.id}_normal.png)`,
+                    backgroundImage: `url(/art/${card.id}_normal-lg.png?v=${artVersion})`,
                     backgroundSize: '180%',
                     backgroundPosition: 'center 25%',
                     maskImage: 'linear-gradient(to right, transparent 0%, black 30%, black 70%, transparent 100%)',
@@ -1006,7 +1017,7 @@ function CardInclusionFilter({ cardDb, requiredCards, onChange }: { cardDb: Card
                 <div
                   className="absolute inset-0 z-0 pointer-events-none opacity-25"
                   style={{
-                    backgroundImage: `url(/art/${card.id}_normal.png)`,
+                    backgroundImage: `url(/art/${card.id}_normal-lg.png?v=${artVersion})`,
                     backgroundSize: '200%',
                     backgroundPosition: 'center 25%',
                     maskImage: 'linear-gradient(to right, transparent 0%, black 30%, black 80%, transparent 100%)',
@@ -1070,6 +1081,22 @@ export default function DecksView() {
     setMinGames(deckGameMode === 'wild' ? 50 : 200)
     setMinGamesInput(String(deckGameMode === 'wild' ? 50 : 200))
   }, [deckGameMode])
+
+  const standardSetCodes = useMemo(
+    () => new Set(expansions.filter(e => e.standard).map(e => e.code)),
+    [expansions],
+  )
+
+  useEffect(() => {
+    if (deckGameMode !== 'standard') return
+    setRequiredCards(prev => {
+      const next = prev.filter(id => {
+        const card = cardDb[String(id)]
+        return !!card && standardSetCodes.has(card.set)
+      })
+      return next.length === prev.length ? prev : next
+    })
+  }, [deckGameMode, cardDb, standardSetCodes])
 
   const rotationInfo = useRotationInfo(expansions, 60)
   const rotatingCodes = deckGameMode === 'wild' ? new Set<string>() : (rotationInfo?.rotatingCodes ?? new Set<string>())
@@ -1456,7 +1483,12 @@ export default function DecksView() {
               />
             </div>
           </div>
-          <CardInclusionFilter cardDb={cardDb} requiredCards={requiredCards} onChange={setRequiredCards} />
+          <CardInclusionFilter
+            cardDb={cardDb}
+            requiredCards={requiredCards}
+            onChange={setRequiredCards}
+            allowedSetCodes={deckGameMode === 'standard' ? standardSetCodes : null}
+          />
           </div>
         )}
       </div>

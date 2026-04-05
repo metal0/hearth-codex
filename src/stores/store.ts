@@ -16,6 +16,16 @@ import {
 
 type SyncResult = { success: boolean; cards?: number; dust?: number; error?: string }
 let pendingSyncPromise: Promise<SyncResult> | null = null
+let calculatorRequestId = 0
+let calculatorCache: {
+  key: string
+  results: CalculatorResponse
+  cardsRef: CardDb
+  expansionsRef: Expansion[]
+  collectionRef: CollectionData | null
+  metaStandardRef: Record<string, MetaEntry>
+  metaWildRef: Record<string, MetaEntry>
+} | null = null
 
 function craftQueueKey(): string {
   const acct = getStoredAccountId();
@@ -371,9 +381,27 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   runCalculator: async (expansionCodes: string[], dust: number, metaOnly?: boolean) => {
+    const { cards, expansions, collection, metaStandard, metaWild } = get();
+    const normalizedCodes = [...new Set(expansionCodes)].sort();
+    const cacheKey = [normalizedCodes.join(','), dust, metaOnly ? 1 : 0].join('|');
+
+    const canReuseCache = calculatorCache?.key === cacheKey
+      && calculatorCache.cardsRef === cards
+      && calculatorCache.expansionsRef === expansions
+      && calculatorCache.collectionRef === collection
+      && (!metaOnly || (
+        calculatorCache.metaStandardRef === metaStandard
+        && calculatorCache.metaWildRef === metaWild
+      ));
+
+    if (canReuseCache && calculatorCache) {
+      set({ calculatorResults: calculatorCache.results });
+      return;
+    }
+
+    const requestId = ++calculatorRequestId;
     set({ calculatorLoading: true });
     try {
-      const { cards, expansions, collection, metaStandard, metaWild } = get();
       const results = await new Promise<CalculatorResponse>((resolve, reject) => {
         const worker = new CalculatorWorker();
         worker.onmessage = (e: MessageEvent<CalculatorResponse>) => {
@@ -384,7 +412,7 @@ export const useStore = create<AppState>((set, get) => ({
           reject(err);
           worker.terminate();
         };
-        const msg: Record<string, unknown> = { expansionCodes, expansions, cardDb: cards, collection, dust };
+        const msg: Record<string, unknown> = { expansionCodes: normalizedCodes, expansions, cardDb: cards, collection, dust };
         if (metaOnly) {
           msg.metaOnly = true;
           msg.metaStandard = metaStandard;
@@ -392,11 +420,24 @@ export const useStore = create<AppState>((set, get) => ({
         }
         worker.postMessage(msg);
       });
+      if (requestId !== calculatorRequestId) return;
+      calculatorCache = {
+        key: cacheKey,
+        results,
+        cardsRef: cards,
+        expansionsRef: expansions,
+        collectionRef: collection,
+        metaStandardRef: metaStandard,
+        metaWildRef: metaWild,
+      };
       set({ calculatorResults: results });
     } catch (err) {
+      if (requestId !== calculatorRequestId) return;
       console.error('Calculator error:', err);
     } finally {
-      set({ calculatorLoading: false });
+      if (requestId === calculatorRequestId) {
+        set({ calculatorLoading: false });
+      }
     }
   },
 
